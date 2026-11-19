@@ -1,0 +1,205 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+[data-theme="ikoch_dark"] {
+  --bg-app: #080a0f;
+  --bg-panel: #0b0d14;
+  --bg-card: #121623;
+  --bg-elevated: #171c2b;
+  --accent: #4f6ef7;
+  --accent-hover: #6d89ff;
+  --accent-rgb: 79 110 247;
+  --accent-soft: rgba(79, 110, 247, 0.16);
+  --text-primary: #f1f5f9;
+}
+
+[data-theme="oled_midnight"] {
+  --bg-app: #050608;
+  --bg-panel: #080a0e;
+  --bg-card: #0e1218;
+  --bg-elevated: #141a24;
+  --accent: #06b6d4;
+  --accent-hover: #22d3ee;
+  --accent-rgb: 6 182 212;
+  --accent-soft: rgba(6, 182, 212, 0.16);
+  --text-primary: #f1f5f9;
+}
+
+[data-theme="crimson_pro"] {
+  --bg-app: #0b080b;
+  --bg-panel: #100c10;
+  --bg-card: #181218;
+  --bg-elevated: #211821;
+  --accent: #e11d48;
+  --accent-hover: #f43f5e;
+  --accent-rgb: 225 29 72;
+  --accent-soft: rgba(225, 29, 72, 0.17);
+  --text-primary: #f8f4f6;
+}
+
+[data-theme="nordic_slate"] {
+  --bg-app: #0c1118;
+  --bg-panel: #101721;
+  --bg-card: #16202d;
+  --bg-elevated: #1c2838;
+  --accent: #10b981;
+  --accent-hover: #34d399;
+  --accent-rgb: 16 185 129;
+  --accent-soft: rgba(16, 185, 129, 0.16);
+  --text-primary: #ecfdf5;
+}
+
+[data-theme="amethyst_neon"] {
+  --bg-app: #090711;
+  --bg-panel: #0f0c1b;
+  --bg-card: #171229;
+  --bg-elevated: #1f1938;
+  --accent: #a855f7;
+  --accent-hover: #c084fc;
+  --accent-rgb: 168 85 247;
+  --accent-soft: rgba(168, 85, 247, 0.17);
+  --text-primary: #f5f3ff;
+}
+
+[data-theme="sunset_amber"] {
+  --bg-app: #0c0907;
+  --bg-panel: #120e0b;
+  --bg-card: #1b1510;
+  --bg-elevated: #241c15;
+  --accent: #f59e0b;
+  --accent-hover: #fbbf24;
+  --accent-rgb: 245 158 11;
+  --accent-soft: rgba(245, 158, 11, 0.17);
+  --text-primary: #fef3c7;
+}
+
+[data-theme="emerald_matrix"] {
+  --bg-app: #060b08;
+  --bg-panel: #0a110d;
+  --bg-card: #101b14;
+  --bg-elevated: #15251b;
+  --accent: #22c55e;
+  --accent-hover: #4ade80;
+  --accent-rgb: 34 197 94;
+  --accent-soft: rgba(34, 197, 94, 0.17);
+  --text-primary: #ecfdf5;
+}
+
+[data-theme="frost_slate"] {
+  --bg-app: #0a0f17;
+  --bg-panel: #0f1622;
+  --bg-card: #162030;
+  --bg-elevated: #1d2a3f;
+  --accent: #38bdf8;
+  --accent-hover: #7dd3fc;
+  --accent-rgb: 56 189 248;
+  --accent-soft: rgba(56, 189, 248, 0.16);
+  --text-primary: #f0f9ff;
+}
+
+@layer base {
+  html:not(.toast-page),
+  html:not(.toast-page) body,
+  #root {
+    height: 100%;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+  }
+
+  html.toast-page,
+  html.toast-page body {
+    height: 100%;
+    background-color: transparent;
+    color: var(--text-primary);
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.24);
+  }
+}
+
+@keyframes toast-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-progress {
+  0% {
+    width: 100%;
+  }
+  100% {
+    width: 0%;
+  }
+}
+
+.animate-toast-enter {
+  animation: toast-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-toast-progress {
+  animation: toast-progress 2.6s linear forwards;
+}
+
+/* Custom sleek range slider with accent track fill */
+input[type="range"].ikoch-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"].ikoch-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.24),
+    0 2px 6px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+input[type="range"].ikoch-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / 0.36),
+    0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+input[type="range"].ikoch-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+[data-theme="custom"] h1,
+[data-theme="custom"] h2,
+[data-theme="custom"] h3,
+[data-theme="custom"] .text-slate-100,
+[data-theme="custom"] .text-slate-200 {
+  color: var(--text-primary);
+}

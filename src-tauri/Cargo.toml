@@ -1,0 +1,38 @@
+[package]
+name = "ikoch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "ikoch_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+core-types.workspace = true
+core-capture.workspace = true
+core-audio.workspace = true
+recorder-daemon.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tauri-plugin-single-instance.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+windows.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

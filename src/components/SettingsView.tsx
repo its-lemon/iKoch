@@ -1,0 +1,2636 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity,
+  Bell,
+  Check,
+  CheckCircle2,
+  Database,
+  Gamepad2,
+  Globe,
+  HardDrive,
+  Keyboard,
+  Mic,
+  Monitor,
+  Palette,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Trash2,
+  Volume2,
+  X,
+} from "lucide-react";
+import { api } from "../api";
+import { useI18n } from "../i18n";
+import type {
+  AppLanguage,
+  AppSettings,
+  AppTheme,
+  AudioDeviceInfo,
+  CacheCleanupMode,
+  CaptureTarget,
+  CustomThemeColors,
+  EditorCacheStats,
+  GpuVendorPreference,
+  HdrMode,
+  MonitorInfo,
+  NotificationSoundEntry,
+  RateControlMode,
+  ResolutionPreset,
+  SoundNotificationKind,
+  VideoCodec,
+  WindowInfo,
+} from "../types";
+import { captureTargetKey, formatBytes } from "../utils/format";
+import {
+  DEFAULT_CUSTOM_THEME,
+  THEME_PRESETS,
+  isValidHex,
+  normalizeCustomColors,
+} from "../utils/theme";
+import { AccentSlider } from "./AccentSlider";
+import { CustomSelect, type SelectOption } from "./CustomSelect";
+
+type SettingsTab =
+  | "capture"
+  | "audio"
+  | "notifications"
+  | "appearance"
+  | "hotkeys_storage";
+
+interface SettingsViewProps {
+  settings: AppSettings;
+  monitors: MonitorInfo[];
+  windows: WindowInfo[];
+  onRefreshSources: () => Promise<void>;
+  onSaveSettings: (next: AppSettings) => Promise<void>;
+  onPreviewTheme: (theme: AppTheme | null) => void;
+  onPreviewCustomTheme: (colors: CustomThemeColors | null) => void;
+  onChangeLanguageInstant: (lang: AppLanguage) => void;
+  onOpenFolder: () => void;
+  onNotify: (
+    title: string,
+    message: string,
+    variant?: "success" | "error" | "info"
+  ) => void;
+}
+
+function ToggleSwitch({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between gap-3 rounded-xl bg-white/[0.025] px-3.5 py-2.5 text-left ring-1 ring-white/[0.06] transition hover:bg-white/[0.045] hover:ring-[rgb(var(--accent-rgb)/0.45)]"
+    >
+      <div>
+        <div className="text-xs font-medium text-slate-200">{label}</div>
+        {hint && (
+          <div className="mt-0.5 text-[11px] text-slate-400">{hint}</div>
+        )}
+      </div>
+      <span
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+          checked ? "bg-[var(--accent)]" : "bg-white/[0.14]"
+        }`}
+      >
+        <span
+          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+            checked ? "translate-x-5" : "translate-x-1"
+          }`}
+        />
+      </span>
+    </button>
+  );
+}
+
+function keyEventToComboString(e: React.KeyboardEvent): string | null {
+  const ignored = ["Control", "Shift", "Alt", "Meta", "OS"];
+  if (ignored.includes(e.key)) return null;
+  const parts: string[] = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+
+  let keyName = e.key;
+  if (keyName === " ") keyName = "Space";
+  else if (keyName.length === 1) keyName = keyName.toUpperCase();
+  parts.push(keyName);
+  return parts.join("+");
+}
+
+function ExeListEditor({
+  title,
+  hint,
+  items,
+  placeholder,
+  addLabel,
+  emptyLabel,
+  onChange,
+}: {
+  title: string;
+  hint: string;
+  items: string[];
+  placeholder: string;
+  addLabel: string;
+  emptyLabel: string;
+  onChange: (next: string[]) => void;
+}) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const clean = input.trim().toLowerCase();
+    if (!clean || items.includes(clean)) return;
+    onChange([...items, clean]);
+    setInput("");
+  };
+  return (
+    <div className="rounded-xl bg-white/[0.025] p-3.5 ring-1 ring-white/[0.06]">
+      <div className="text-xs font-semibold text-white">{title}</div>
+      <div className="mt-0.5 text-[11px] text-slate-400">{hint}</div>
+      <div className="mt-2.5 flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+          placeholder={placeholder}
+          className="flex-1 rounded-xl bg-black/35 px-3 py-1.5 text-xs text-white placeholder-slate-500 ring-1 ring-white/[0.08] outline-none focus:ring-[var(--accent)]"
+        />
+        <button
+          type="button"
+          onClick={add}
+          className="inline-flex items-center gap-1 rounded-xl bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[var(--accent-hover)]"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          {addLabel}
+        </button>
+      </div>
+      <div className="mt-2.5 flex flex-wrap gap-1.5">
+        {items.length === 0 ? (
+          <span className="text-[11px] text-slate-500">{emptyLabel}</span>
+        ) : (
+          items.map((exe) => (
+            <span
+              key={exe}
+              className="inline-flex items-center gap-1 rounded-lg bg-white/[0.06] px-2.5 py-1 font-mono text-[11px] text-slate-200 ring-1 ring-white/[0.07]"
+            >
+              {exe}
+              <button
+                type="button"
+                onClick={() => onChange(items.filter((x) => x !== exe))}
+                className="text-slate-400 hover:text-rose-400"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </span>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function SettingsView({
+  settings,
+  monitors,
+  windows,
+  onRefreshSources,
+  onSaveSettings,
+  onPreviewTheme,
+  onPreviewCustomTheme,
+  onChangeLanguageInstant,
+  onOpenFolder,
+  onNotify,
+}: SettingsViewProps) {
+  const { t, lang } = useI18n();
+  const [tab, setTab] = useState<SettingsTab>("capture");
+  const [draft, setDraft] = useState<AppSettings>(() =>
+    structuredClone(settings)
+  );
+  const [hexInputs, setHexInputs] = useState<CustomThemeColors>(() =>
+    normalizeCustomColors(settings.custom_theme)
+  );
+  const prevSettingsRef = useRef<AppSettings>(settings);
+  const [saving, setSaving] = useState(false);
+
+  const [outDevices, setOutDevices] = useState<AudioDeviceInfo[]>([]);
+  const [inDevices, setInDevices] = useState<AudioDeviceInfo[]>([]);
+  const [capturingKeyField, setCapturingKeyField] = useState<string | null>(
+    null
+  );
+
+  const [cacheStats, setCacheStats] = useState<EditorCacheStats>({
+    temp_bytes: 0,
+    temp_file_count: 0,
+    metadata_bytes: 0,
+    metadata_file_count: 0,
+  });
+  const [clearingCache, setClearingCache] = useState(false);
+
+  // Live microphone level tester state
+  const [micTesting, setMicTesting] = useState(false);
+  const [micLevelPct, setMicLevelPct] = useState(0);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micCtxRef = useRef<AudioContext | null>(null);
+  const micRafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const prev = prevSettingsRef.current;
+    prevSettingsRef.current = settings;
+    const onlyLanguageChanged =
+      prev.language !== settings.language &&
+      JSON.stringify({ ...prev, language: settings.language }) ===
+        JSON.stringify(settings);
+
+    if (onlyLanguageChanged) {
+      setDraft((d) => ({ ...d, language: settings.language }));
+      return;
+    }
+
+    setDraft(structuredClone(settings));
+    setHexInputs(normalizeCustomColors(settings.custom_theme));
+  }, [settings]);
+
+  // Restore saved theme if user exits Settings without saving a previewed theme.
+  useEffect(() => {
+    return () => {
+      onPreviewTheme(null);
+      onPreviewCustomTheme(null);
+    };
+  }, [onPreviewCustomTheme, onPreviewTheme]);
+
+  const refreshCacheStats = useCallback(async () => {
+    try {
+      const stats = await api.getEditorCacheStats();
+      setCacheStats(stats);
+    } catch {
+      // Non-critical background readout
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCacheStats();
+  }, [refreshCacheStats]);
+
+  const stopMicTester = () => {
+    if (micRafRef.current !== null) {
+      cancelAnimationFrame(micRafRef.current);
+      micRafRef.current = null;
+    }
+    if (micStreamRef.current) {
+      for (const track of micStreamRef.current.getTracks()) {
+        track.stop();
+      }
+      micStreamRef.current = null;
+    }
+    if (micCtxRef.current) {
+      void micCtxRef.current.close().catch(() => {});
+      micCtxRef.current = null;
+    }
+    setMicTesting(false);
+    setMicLevelPct(0);
+  };
+
+  useEffect(() => {
+    return () => stopMicTester();
+  }, []);
+
+  const toggleMicTester = async () => {
+    if (micTesting) {
+      stopMicTester();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const ctx = new AudioContext();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+
+      micStreamRef.current = stream;
+      micCtxRef.current = ctx;
+      setMicTesting(true);
+
+      const buf = new Uint8Array(analyser.frequencyBinCount);
+      const update = () => {
+        analyser.getByteTimeDomainData(buf);
+        let peak = 0;
+        for (let i = 0; i < buf.length; i += 1) {
+          const v = Math.abs(buf[i] - 128) / 128;
+          if (v > peak) peak = v;
+        }
+        setMicLevelPct(Math.min(100, Math.round(peak * 180)));
+        micRafRef.current = requestAnimationFrame(update);
+      };
+      update();
+    } catch (err) {
+      onNotify(t.settings.micTesterUnavailable, String(err), "info");
+    }
+  };
+
+  const hasUnsavedChanges = useMemo(() => {
+    return JSON.stringify(draft) !== JSON.stringify(settings);
+  }, [draft, settings]);
+
+  const loadAudioDevices = useCallback(async () => {
+    try {
+      const [outs, ins] = await Promise.all([
+        api.listAudioOutputDevices(),
+        api.listAudioInputDevices(),
+      ]);
+      setOutDevices(outs);
+      setInDevices(ins);
+    } catch (err) {
+      onNotify(t.settings.audioDevicesError, String(err), "error");
+    }
+  }, [onNotify, t.settings.audioDevicesError]);
+
+  useEffect(() => {
+    void loadAudioDevices();
+  }, [loadAudioDevices]);
+
+  const commitSave = async (customDraft?: AppSettings) => {
+    const next = customDraft ?? draft;
+    setSaving(true);
+    try {
+      await onSaveSettings(next);
+      onNotify(t.settings.savedTitle, t.settings.savedMsg, "success");
+    } catch (err) {
+      onNotify(t.settings.saveErrorTitle, String(err), "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSelectLanguage = (nextLang: AppLanguage) => {
+    setDraft((p) => ({ ...p, language: nextLang }));
+    onChangeLanguageInstant(nextLang);
+  };
+
+  const handleCustomColorInput = (
+    field: keyof CustomThemeColors,
+    rawValue: string
+  ) => {
+    setHexInputs((prev) => ({ ...prev, [field]: rawValue }));
+    if (isValidHex(rawValue)) {
+      const cleanHex = rawValue.trim().toUpperCase();
+      setHexInputs((prev) => ({ ...prev, [field]: cleanHex }));
+      const nextCustom = normalizeCustomColors({
+        ...draft.custom_theme,
+        [field]: cleanHex,
+      });
+      setDraft((p) => ({
+        ...p,
+        theme: "custom",
+        custom_theme: nextCustom,
+      }));
+      onPreviewTheme("custom");
+      onPreviewCustomTheme(nextCustom);
+    }
+  };
+
+  const handleResetCustomTheme = () => {
+    const reset = { ...DEFAULT_CUSTOM_THEME };
+    setHexInputs(reset);
+    setDraft((p) => ({
+      ...p,
+      theme: "custom",
+      custom_theme: reset,
+    }));
+    onPreviewTheme("custom");
+    onPreviewCustomTheme(reset);
+  };
+
+  const applyLiveVolumes = (
+    gameVol: number,
+    micVol: number,
+    secVol: number
+  ) => {
+    void api
+      .sendRecorderCommand({
+        cmd: "set_audio_volumes",
+        game_volume: gameVol,
+        mic_volume: micVol,
+        secondary_volume: secVol,
+      })
+      .catch(() => {});
+  };
+
+  const applyLiveRnnoise = (
+    enabled: boolean,
+    strength: number,
+    gateDb: number | null
+  ) => {
+    void api
+      .sendRecorderCommand({
+        cmd: "set_mic_noise_suppression",
+        enabled,
+        strength,
+        noise_gate_db: gateDb,
+      })
+      .catch(() => {});
+  };
+
+  const handleTestSound = async (kind: SoundNotificationKind) => {
+    try {
+      await onSaveSettings(draft);
+      await api.playTestSound(kind);
+    } catch (err) {
+      onNotify(t.settings.testSoundError, String(err), "error");
+    }
+  };
+
+  const handleCleanupNow = async () => {
+    try {
+      await onSaveSettings(draft);
+      const [deleted, freed] = await api.runStorageCleanupNow();
+      onNotify(
+        t.settings.diskCleanedTitle,
+        t.settings.diskCleanedMsg(deleted, formatBytes(freed, lang)),
+        "info"
+      );
+    } catch (err) {
+      onNotify(t.settings.diskCleanError, String(err), "error");
+    }
+  };
+
+  const handleClearEditorCacheNow = async () => {
+    setClearingCache(true);
+    try {
+      const [deleted, freed] = await api.clearEditorCacheNow();
+      await refreshCacheStats();
+      onNotify(
+        t.settings.cacheClearedTitle,
+        t.settings.cacheClearedMsg(deleted, formatBytes(freed, lang)),
+        "success"
+      );
+    } catch (err) {
+      onNotify(t.settings.cacheClearError, String(err), "error");
+    } finally {
+      setClearingCache(false);
+    }
+  };
+
+  const targetOptions: { key: string; label: string; target: CaptureTarget }[] =
+    [
+      {
+        key: "auto_game",
+        label: t.topBar.autoGame,
+        target: { kind: "auto_game" },
+      },
+      ...monitors.map((m) => ({
+        key: `monitor:${m.monitor_id}`,
+        label: t.topBar.monitorPrefix(m.name),
+        target: {
+          kind: "monitor",
+          monitor_id: m.monitor_id,
+          name: m.name,
+        } as CaptureTarget,
+      })),
+      ...windows.map((w) => ({
+        key: `window:${w.hwnd}`,
+        label: t.topBar.windowPrefix(w.process_name, w.title),
+        target: {
+          kind: "specific_window",
+          hwnd: w.hwnd,
+          process_name: w.process_name,
+          title: w.title,
+        } as CaptureTarget,
+      })),
+    ];
+  const draftTargetKey = captureTargetKey(draft.capture.target);
+  if (!targetOptions.some((o) => o.key === draftTargetKey)) {
+    if (draft.capture.target.kind === "monitor") {
+      targetOptions.push({
+        key: draftTargetKey,
+        label: t.topBar.monitorPrefix(draft.capture.target.name),
+        target: draft.capture.target,
+      });
+    } else if (draft.capture.target.kind === "specific_window") {
+      targetOptions.push({
+        key: draftTargetKey,
+        label: t.topBar.windowPrefix(
+          draft.capture.target.process_name,
+          draft.capture.target.title
+        ),
+        target: draft.capture.target,
+      });
+    }
+  }
+
+  const updateSoundEntry = (
+    key: keyof AppSettings["notifications"]["sounds"],
+    updater: (prev: NotificationSoundEntry) => NotificationSoundEntry
+  ) => {
+    setDraft((prev) => ({
+      ...prev,
+      notifications: {
+        ...prev.notifications,
+        sounds: {
+          ...prev.notifications.sounds,
+          [key]: updater(prev.notifications.sounds[key]),
+        },
+      },
+    }));
+  };
+
+  const renderHotkeyInput = (
+    fieldId: string,
+    label: string,
+    value: string,
+    onChangeVal: (val: string) => void
+  ) => {
+    const isRecording = capturingKeyField === fieldId;
+    return (
+      <div className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.025] px-3.5 py-2.5 ring-1 ring-white/[0.06]">
+        <span className="text-xs font-medium text-slate-200">{label}</span>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={isRecording ? t.settings.pressKey : value}
+            readOnly={isRecording}
+            onKeyDown={(e) => {
+              if (!isRecording) return;
+              e.preventDefault();
+              if (e.key === "Escape") {
+                setCapturingKeyField(null);
+                return;
+              }
+              const combo = keyEventToComboString(e);
+              if (combo) {
+                onChangeVal(combo);
+                setCapturingKeyField(null);
+              }
+            }}
+            onChange={(e) => {
+              if (!isRecording) onChangeVal(e.target.value);
+            }}
+            onBlur={() => {
+              if (isRecording) setCapturingKeyField(null);
+            }}
+            className={`w-40 rounded-xl px-2.5 py-1.5 text-center font-mono text-xs ring-1 outline-none ${
+              isRecording
+                ? "bg-[rgb(var(--accent-rgb)/0.2)] text-white ring-[var(--accent)]"
+                : "bg-black/35 text-white ring-white/[0.08]"
+            }`}
+          />
+          <button
+            type="button"
+            onClick={() => setCapturingKeyField(isRecording ? null : fieldId)}
+            className="rounded-xl bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-slate-200 transition hover:bg-white/[0.12] hover:text-white"
+          >
+            {isRecording ? t.settings.cancelBtn : t.settings.assignBtn}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const fieldCls =
+    "mt-1.5 w-full rounded-xl bg-black/35 px-3 py-2 text-xs text-white ring-1 ring-white/[0.08] outline-none transition focus:ring-[var(--accent)]";
+  const labelTitleCls = "mb-1.5 text-xs font-medium text-slate-300";
+  const sectionCls =
+    "space-y-4 rounded-2xl bg-white/[0.025] p-5 ring-1 ring-white/[0.06]";
+  const actionChipBtn =
+    "inline-flex items-center gap-1.5 rounded-xl bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-slate-200 transition hover:bg-white/[0.12] hover:text-white";
+
+  // SelectOption lists
+  const captureSourceSelectOptions: SelectOption[] = targetOptions.map((o) => ({
+    value: o.key,
+    label: o.label,
+  }));
+
+  const hdrOptions: SelectOption[] = [
+    { value: "auto_tone_map_to_sdr", label: t.settings.hdrAuto },
+    { value: "force_sdr_clamp", label: t.settings.hdrForce },
+    { value: "preserve_hdr10", label: t.settings.hdrPreserve },
+  ];
+
+  const resolutionOptions: SelectOption[] = [
+    { value: "native", label: t.settings.resNative },
+    { value: "p1080", label: t.settings.res1080 },
+    { value: "p720", label: t.settings.res720 },
+    { value: "custom", label: t.settings.resCustom },
+  ];
+
+  const fpsOptions: SelectOption[] = [30, 60, 120, 144, 240].map((fps) => ({
+    value: String(fps),
+    label: `${fps} FPS`,
+  }));
+
+  const codecOptions: SelectOption[] = [
+    { value: "h264", label: t.settings.codecH264 },
+    { value: "hevc", label: t.settings.codecHevc },
+    { value: "av1", label: t.settings.codecAv1 },
+  ];
+
+  const gpuOptions: SelectOption[] = [
+    { value: "auto", label: t.settings.gpuAuto },
+    { value: "nvidia_nvenc", label: t.settings.gpuNvenc },
+    { value: "amd_amf", label: t.settings.gpuAmf },
+    { value: "intel_qsv", label: t.settings.gpuQsv },
+    { value: "software_fallback", label: t.settings.gpuSoft },
+  ];
+
+  const rateControlOptions: SelectOption[] = [
+    { value: "vbr", label: t.settings.rcVbr },
+    { value: "cbr", label: t.settings.rcCbr },
+    { value: "cqp", label: t.settings.rcCqp },
+  ];
+
+  const gameAudioOptions: SelectOption[] = [
+    { value: "default_device", label: t.settings.gameAudioDefault },
+    { value: "game_process_only", label: t.settings.gameAudioProcess },
+    ...outDevices.map((d) => ({
+      value: `spec:${d.id}`,
+      label: `${d.is_default ? "[Default] " : ""}${d.name}`,
+    })),
+  ];
+
+  const secondaryAudioOptions: SelectOption[] = [
+    { value: "", label: t.settings.disabledOption },
+    ...outDevices.map((d) => ({
+      value: d.id,
+      label: d.name,
+    })),
+  ];
+
+  const micDeviceOptions: SelectOption[] = [
+    { value: "none", label: t.settings.micNone },
+    { value: "default", label: t.settings.micDefault },
+    ...inDevices.map((d) => ({
+      value: `spec:${d.id}`,
+      label: `${d.is_default ? "[Default] " : ""}${d.name}`,
+    })),
+  ];
+
+  const micModeOptions: SelectOption[] = [
+    { value: "always_on", label: t.settings.micAlwaysOn },
+    { value: "push_to_talk", label: t.settings.micPtt },
+    { value: "push_to_mute", label: t.settings.micPtm },
+  ];
+
+  const soundKindOptions: SelectOption[] = [
+    { value: "preset", label: t.settings.soundPresetOpt },
+    { value: "custom_file", label: t.settings.soundCustomOpt },
+    { value: "silent", label: t.settings.soundSilentOpt },
+  ];
+
+  const soundPresetOptions: SelectOption[] = [
+    { value: "chime", label: t.settings.presetChime },
+    { value: "start", label: t.settings.presetStart },
+    { value: "stop", label: t.settings.presetStop },
+    { value: "tick", label: t.settings.presetTick },
+  ];
+
+  const msUnit = lang === "en" ? "ms" : "мс";
+  const minShortUnit = lang === "en" ? "m" : "м";
+  const customPreviewColors = normalizeCustomColors(draft.custom_theme);
+
+  const customColorFields: {
+    key: keyof CustomThemeColors;
+    label: string;
+  }[] = [
+    { key: "bg_app", label: t.settings.colorBgApp },
+    { key: "bg_panel", label: t.settings.colorBgPanel },
+    { key: "accent", label: t.settings.colorAccent },
+    { key: "text_primary", label: t.settings.colorTextPrimary },
+  ];
+
+  return (
+    <div className="flex h-full flex-col overflow-hidden bg-[var(--bg-app)]">
+      {/* Header with Quick Language Toggle & Live Save Indicator */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.06] bg-[var(--bg-panel)] px-6 py-4">
+        <div>
+          <h1 className="text-lg font-bold tracking-tight text-white">
+            {t.settings.title}
+          </h1>
+          <p className="text-xs text-slate-400">{t.settings.subtitle}</p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Compact RU / EN pill */}
+          <div className="inline-flex items-center rounded-xl bg-white/[0.04] p-0.5 ring-1 ring-white/[0.07]">
+            {(["ru", "en"] as AppLanguage[]).map((code) => (
+              <button
+                key={code}
+                type="button"
+                onClick={() => handleSelectLanguage(code)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-bold uppercase transition ${
+                  lang === code
+                    ? "bg-[var(--accent)] text-white shadow-sm"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                {code.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          {hasUnsavedChanges ? (
+            <span className="rounded-full bg-amber-500/15 px-3 py-1 text-[11px] font-semibold text-amber-300 ring-1 ring-amber-500/35">
+              {t.settings.unsaved}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {t.settings.applied}
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void commitSave()}
+            disabled={saving}
+            className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-[var(--accent-hover)] disabled:opacity-50"
+          >
+            <Save className="h-4 w-4" />
+            {saving ? t.settings.saving : t.settings.saveBtn}
+          </button>
+        </div>
+      </div>
+
+      {/* Category tabs in exact required order */}
+      <div className="flex flex-wrap gap-1.5 border-b border-white/[0.06] bg-[var(--bg-panel)] px-6 py-2.5">
+        {(
+          [
+            ["capture", t.settings.tabCapture, Monitor],
+            ["audio", t.settings.tabAudio, Mic],
+            ["notifications", t.settings.tabNotifications, Bell],
+            ["appearance", t.settings.tabAppearance, Palette],
+            ["hotkeys_storage", t.settings.tabHotkeysStorage, HardDrive],
+          ] as [SettingsTab, string, typeof Monitor][]
+        ).map(([id, label, Icon]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
+              tab === id
+                ? "bg-[rgb(var(--accent-rgb)/0.18)] text-[var(--accent-hover)] ring-1 ring-[rgb(var(--accent-rgb)/0.4)]"
+                : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-200"
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Settings Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="mx-auto max-w-4xl space-y-5">
+          {tab === "capture" && (
+            <>
+              <section className={sectionCls}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-bold text-white">
+                    {t.settings.videoSourceTitle}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => void onRefreshSources()}
+                    className={actionChipBtn}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    {t.settings.refreshSources}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.defaultCaptureSource}
+                    </div>
+                    <CustomSelect
+                      value={draftTargetKey}
+                      options={captureSourceSelectOptions}
+                      onChange={(val) => {
+                        const found = targetOptions.find((o) => o.key === val);
+                        if (found) {
+                          setDraft((p) => ({
+                            ...p,
+                            capture: { ...p.capture, target: found.target },
+                          }));
+                        }
+                      }}
+                      ariaLabel={t.settings.defaultCaptureSource}
+                    />
+                  </div>
+
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.hdrConversion}
+                    </div>
+                    <CustomSelect
+                      value={draft.capture.hdr_mode}
+                      options={hdrOptions}
+                      onChange={(val) =>
+                        setDraft((p) => ({
+                          ...p,
+                          capture: {
+                            ...p.capture,
+                            hdr_mode: val as HdrMode,
+                          },
+                        }))
+                      }
+                      ariaLabel={t.settings.hdrConversion}
+                    />
+                  </div>
+
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.resolution}
+                    </div>
+                    <CustomSelect
+                      value={draft.video.resolution.preset}
+                      options={resolutionOptions}
+                      onChange={(pType) => {
+                        const nextRes: ResolutionPreset =
+                          pType === "native"
+                            ? { preset: "native" }
+                            : pType === "p1080"
+                              ? { preset: "p1080" }
+                              : pType === "p720"
+                                ? { preset: "p720" }
+                                : {
+                                    preset: "custom",
+                                    width: 1920,
+                                    height: 1080,
+                                  };
+                        setDraft((p) => ({
+                          ...p,
+                          video: { ...p.video, resolution: nextRes },
+                        }));
+                      }}
+                      ariaLabel={t.settings.resolution}
+                    />
+                  </div>
+
+                  {draft.video.resolution.preset === "custom" && (
+                    <div className="flex items-end gap-2">
+                      <label className="flex-1 text-xs text-slate-300">
+                        {t.settings.width}
+                        <input
+                          type="number"
+                          value={draft.video.resolution.width}
+                          onChange={(e) => {
+                            const w = Math.max(
+                              320,
+                              Number(e.target.value) || 1920
+                            );
+                            setDraft((p) => ({
+                              ...p,
+                              video: {
+                                ...p.video,
+                                resolution: {
+                                  preset: "custom",
+                                  width: w,
+                                  height:
+                                    p.video.resolution.preset === "custom"
+                                      ? p.video.resolution.height
+                                      : 1080,
+                                },
+                              },
+                            }));
+                          }}
+                          className={fieldCls}
+                        />
+                      </label>
+                      <label className="flex-1 text-xs text-slate-300">
+                        {t.settings.height}
+                        <input
+                          type="number"
+                          value={draft.video.resolution.height}
+                          onChange={(e) => {
+                            const h = Math.max(
+                              240,
+                              Number(e.target.value) || 1080
+                            );
+                            setDraft((p) => ({
+                              ...p,
+                              video: {
+                                ...p.video,
+                                resolution: {
+                                  preset: "custom",
+                                  width:
+                                    p.video.resolution.preset === "custom"
+                                      ? p.video.resolution.width
+                                      : 1920,
+                                  height: h,
+                                },
+                              },
+                            }));
+                          }}
+                          className={fieldCls}
+                        />
+                      </label>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className={labelTitleCls}>{t.settings.fps}</div>
+                    <CustomSelect
+                      value={String(draft.video.fps)}
+                      options={fpsOptions}
+                      onChange={(val) =>
+                        setDraft((p) => ({
+                          ...p,
+                          video: { ...p.video, fps: Number(val) },
+                        }))
+                      }
+                      ariaLabel={t.settings.fps}
+                    />
+                  </div>
+
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.videoCodec}
+                    </div>
+                    <CustomSelect
+                      value={draft.video.codec}
+                      options={codecOptions}
+                      onChange={(val) =>
+                        setDraft((p) => ({
+                          ...p,
+                          video: {
+                            ...p.video,
+                            codec: val as VideoCodec,
+                          },
+                        }))
+                      }
+                      ariaLabel={t.settings.videoCodec}
+                    />
+                  </div>
+
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.gpuEncoder}
+                    </div>
+                    <CustomSelect
+                      value={draft.video.gpu_vendor}
+                      options={gpuOptions}
+                      onChange={(val) =>
+                        setDraft((p) => ({
+                          ...p,
+                          video: {
+                            ...p.video,
+                            gpu_vendor: val as GpuVendorPreference,
+                          },
+                        }))
+                      }
+                      ariaLabel={t.settings.gpuEncoder}
+                    />
+                  </div>
+
+                  <div className="flex flex-col justify-center">
+                    <AccentSlider
+                      label={t.settings.bitrate}
+                      valueBadge={`${(draft.video.bitrate_kbps / 1000).toFixed(
+                        0
+                      )} ${t.mbpsWord}`}
+                      min={2000}
+                      max={80000}
+                      step={1000}
+                      value={draft.video.bitrate_kbps}
+                      onChange={(val) =>
+                        setDraft((p) => ({
+                          ...p,
+                          video: { ...p.video, bitrate_kbps: val },
+                        }))
+                      }
+                    />
+                  </div>
+
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.rateControl}
+                    </div>
+                    <CustomSelect
+                      value={draft.video.rate_control}
+                      options={rateControlOptions}
+                      onChange={(val) =>
+                        setDraft((p) => ({
+                          ...p,
+                          video: {
+                            ...p.video,
+                            rate_control: val as RateControlMode,
+                          },
+                        }))
+                      }
+                      ariaLabel={t.settings.rateControl}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 pt-1 md:grid-cols-2">
+                  <ToggleSwitch
+                    checked={draft.capture.capture_cursor}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        capture: { ...p.capture, capture_cursor: v },
+                      }))
+                    }
+                    label={t.settings.captureCursor}
+                  />
+                  <ToggleSwitch
+                    checked={draft.capture.capture_border}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        capture: { ...p.capture, capture_border: v },
+                      }))
+                    }
+                    label={t.settings.captureBorder}
+                  />
+                </div>
+              </section>
+
+              <section className={sectionCls}>
+                <h2 className="text-sm font-bold text-white">
+                  {t.settings.replayBufferTitle}
+                </h2>
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                  <AccentSlider
+                    label={t.settings.bufferDurationLabel}
+                    valueBadge={`${draft.replay_buffer.duration_secs} ${t.secWord}`}
+                    min={15}
+                    max={300}
+                    step={5}
+                    value={draft.replay_buffer.duration_secs}
+                    onChange={(val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        replay_buffer: {
+                          ...p.replay_buffer,
+                          duration_secs: val,
+                        },
+                      }))
+                    }
+                  />
+
+                  <AccentSlider
+                    label={t.settings.bufferRamLabel}
+                    valueBadge={`${draft.replay_buffer.max_ram_mb} ${t.mbWord}`}
+                    min={128}
+                    max={2048}
+                    step={64}
+                    value={draft.replay_buffer.max_ram_mb}
+                    onChange={(val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        replay_buffer: {
+                          ...p.replay_buffer,
+                          max_ram_mb: val,
+                        },
+                      }))
+                    }
+                  />
+                </div>
+                <ToggleSwitch
+                  checked={draft.replay_buffer.enabled}
+                  onChange={(v) =>
+                    setDraft((p) => ({
+                      ...p,
+                      replay_buffer: { ...p.replay_buffer, enabled: v },
+                    }))
+                  }
+                  label={t.settings.enableBufferingStartup}
+                />
+              </section>
+
+              <section className={sectionCls}>
+                <div className="flex items-center gap-2">
+                  <Gamepad2 className="h-4 w-4 text-[var(--accent-hover)]" />
+                  <h2 className="text-sm font-bold text-white">
+                    {t.settings.gameDetectionTitle}
+                  </h2>
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <ToggleSwitch
+                    checked={draft.capture.games.auto_start}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        capture: {
+                          ...p.capture,
+                          games: { ...p.capture.games, auto_start: v },
+                        },
+                      }))
+                    }
+                    label={t.settings.autoStartGames}
+                  />
+                  <ToggleSwitch
+                    checked={draft.capture.games.use_builtin_game_list}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        capture: {
+                          ...p.capture,
+                          games: {
+                            ...p.capture.games,
+                            use_builtin_game_list: v,
+                          },
+                        },
+                      }))
+                    }
+                    label={t.settings.builtinGameList}
+                  />
+                </div>
+
+                <div className="max-w-sm">
+                  <AccentSlider
+                    label={t.settings.altTabDelay}
+                    valueBadge={`${draft.capture.games.auto_pause_delay_secs} ${t.secWord}`}
+                    min={0}
+                    max={60}
+                    step={1}
+                    value={draft.capture.games.auto_pause_delay_secs}
+                    onChange={(val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        capture: {
+                          ...p.capture,
+                          games: {
+                            ...p.capture.games,
+                            auto_pause_delay_secs: val,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <ExeListEditor
+                    title={t.settings.whitelistTitle}
+                    hint={t.settings.whitelistHint}
+                    placeholder="valorant-win64-shipping.exe"
+                    addLabel={t.settings.exeAddBtn}
+                    emptyLabel={t.settings.exeListEmpty}
+                    items={draft.capture.games.custom_whitelist_exes}
+                    onChange={(next) =>
+                      setDraft((p) => ({
+                        ...p,
+                        capture: {
+                          ...p.capture,
+                          games: {
+                            ...p.capture.games,
+                            custom_whitelist_exes: next,
+                          },
+                        },
+                      }))
+                    }
+                  />
+                  <ExeListEditor
+                    title={t.settings.blacklistTitle}
+                    hint={t.settings.blacklistHint}
+                    placeholder="discord.exe"
+                    addLabel={t.settings.exeAddBtn}
+                    emptyLabel={t.settings.exeListEmpty}
+                    items={draft.capture.games.blacklist_exes}
+                    onChange={(next) =>
+                      setDraft((p) => ({
+                        ...p,
+                        capture: {
+                          ...p.capture,
+                          games: { ...p.capture.games, blacklist_exes: next },
+                        },
+                      }))
+                    }
+                  />
+                </div>
+              </section>
+            </>
+          )}
+
+          {tab === "audio" && (
+            <>
+              <section className={sectionCls}>
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-bold text-white">
+                    {t.settings.audioDevicesTitle}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => void loadAudioDevices()}
+                    className={actionChipBtn}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    {t.settings.refreshDevices}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.gameAudioLabel}
+                    </div>
+                    <CustomSelect
+                      value={
+                        draft.audio.audio_output_mode.mode === "specific_device"
+                          ? `spec:${draft.audio.audio_output_mode.device_id}`
+                          : draft.audio.audio_output_mode.mode
+                      }
+                      options={gameAudioOptions}
+                      onChange={(val) => {
+                        const nextMode =
+                          val === "default_device"
+                            ? ({ mode: "default_device" } as const)
+                            : val === "game_process_only"
+                              ? ({ mode: "game_process_only" } as const)
+                              : ({
+                                  mode: "specific_device",
+                                  device_id: val.slice(5),
+                                } as const);
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, audio_output_mode: nextMode },
+                        }));
+                      }}
+                      ariaLabel={t.settings.gameAudioLabel}
+                    />
+                  </div>
+
+                  <div>
+                    <div className={labelTitleCls}>
+                      {t.settings.secondaryAudioLabel}
+                    </div>
+                    <CustomSelect
+                      value={draft.audio.secondary_output_device ?? ""}
+                      options={secondaryAudioOptions}
+                      onChange={(val) => {
+                        const v = val || null;
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, secondary_output_device: v },
+                        }));
+                      }}
+                      ariaLabel={t.settings.secondaryAudioLabel}
+                    />
+                  </div>
+
+                  <div>
+                    <div className={labelTitleCls}>{t.settings.micLabel}</div>
+                    <CustomSelect
+                      value={
+                        draft.audio.mic_device.mode === "specific_device"
+                          ? `spec:${draft.audio.mic_device.device_id}`
+                          : draft.audio.mic_device.mode
+                      }
+                      options={micDeviceOptions}
+                      onChange={(val) => {
+                        const nextMic =
+                          val === "none"
+                            ? ({ mode: "none" } as const)
+                            : val === "default"
+                              ? ({ mode: "default" } as const)
+                              : ({
+                                  mode: "specific_device",
+                                  device_id: val.slice(5),
+                                } as const);
+                        setDraft((p) => ({
+                          ...p,
+                          audio: {
+                            ...p.audio,
+                            mic_device: nextMic,
+                            mic_enabled: nextMic.mode !== "none",
+                          },
+                        }));
+                      }}
+                      ariaLabel={t.settings.micLabel}
+                    />
+                  </div>
+
+                  <div className="flex items-end">
+                    <ToggleSwitch
+                      checked={draft.audio.separate_tracks}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, separate_tracks: v },
+                        }))
+                      }
+                      label={t.settings.separateTracks}
+                    />
+                  </div>
+                </div>
+
+                {/* Live Microphone Test & Level Meter */}
+                <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-white/[0.025] p-3.5 ring-1 ring-white/[0.06]">
+                  <div className="flex items-center gap-2.5">
+                    <Activity
+                      className={`h-4 w-4 ${
+                        micTesting ? "text-emerald-400" : "text-slate-400"
+                      }`}
+                    />
+                    <div>
+                      <div className="text-xs font-semibold text-white">
+                        {t.settings.micTesterTitle}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {t.settings.micTesterDesc}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex max-w-xs flex-1 items-center gap-3">
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-white/[0.08]">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-emerald-500 via-lime-400 to-amber-400 transition-all duration-75"
+                        style={{ width: `${micLevelPct}%` }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void toggleMicTester()}
+                      className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${
+                        micTesting
+                          ? "bg-rose-600 text-white hover:bg-rose-500"
+                          : "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
+                      }`}
+                    >
+                      {micTesting
+                        ? t.settings.micTestStop
+                        : t.settings.micTestStart}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-5 border-t border-white/[0.06] pt-4 md:grid-cols-3">
+                  <AccentSlider
+                    label={t.settings.gameVolume}
+                    valueBadge={`${Math.round(draft.audio.game_volume * 100)}%`}
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={draft.audio.game_volume}
+                    onChange={(v) => {
+                      setDraft((p) => ({
+                        ...p,
+                        audio: { ...p.audio, game_volume: v },
+                      }));
+                      applyLiveVolumes(
+                        v,
+                        draft.audio.mic_volume,
+                        draft.audio.secondary_volume
+                      );
+                    }}
+                  />
+
+                  <AccentSlider
+                    label={t.settings.micVolume}
+                    valueBadge={`${Math.round(draft.audio.mic_volume * 100)}%`}
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={draft.audio.mic_volume}
+                    onChange={(v) => {
+                      setDraft((p) => ({
+                        ...p,
+                        audio: { ...p.audio, mic_volume: v },
+                      }));
+                      applyLiveVolumes(
+                        draft.audio.game_volume,
+                        v,
+                        draft.audio.secondary_volume
+                      );
+                    }}
+                  />
+
+                  <AccentSlider
+                    label={t.settings.secondaryVolume}
+                    valueBadge={`${Math.round(
+                      draft.audio.secondary_volume * 100
+                    )}%`}
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={draft.audio.secondary_volume}
+                    onChange={(v) => {
+                      setDraft((p) => ({
+                        ...p,
+                        audio: { ...p.audio, secondary_volume: v },
+                      }));
+                      applyLiveVolumes(
+                        draft.audio.game_volume,
+                        draft.audio.mic_volume,
+                        v
+                      );
+                    }}
+                  />
+                </div>
+              </section>
+
+              <section className={sectionCls}>
+                <h2 className="text-sm font-bold text-white">
+                  {t.settings.micProcessingTitle}
+                </h2>
+
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <ToggleSwitch
+                    checked={draft.audio.mic_noise_suppression}
+                    onChange={(en) => {
+                      setDraft((p) => ({
+                        ...p,
+                        audio: { ...p.audio, mic_noise_suppression: en },
+                      }));
+                      applyLiveRnnoise(
+                        en,
+                        draft.audio.mic_noise_suppression_strength,
+                        draft.audio.mic_noise_gate_db
+                      );
+                    }}
+                    label={t.settings.rnnoiseLabel}
+                    hint={t.settings.rnnoiseHint}
+                  />
+
+                  <ToggleSwitch
+                    checked={draft.audio.mic_soft_limiter}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        audio: { ...p.audio, mic_soft_limiter: v },
+                      }))
+                    }
+                    label={t.settings.softLimiterLabel}
+                    hint={t.settings.softLimiterHint}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                  <AccentSlider
+                    label={t.settings.rnnoiseStrength}
+                    valueBadge={`${Math.round(
+                      draft.audio.mic_noise_suppression_strength * 100
+                    )}%`}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    disabled={!draft.audio.mic_noise_suppression}
+                    value={draft.audio.mic_noise_suppression_strength}
+                    onChange={(val) => {
+                      setDraft((p) => ({
+                        ...p,
+                        audio: {
+                          ...p.audio,
+                          mic_noise_suppression_strength: val,
+                        },
+                      }));
+                      applyLiveRnnoise(
+                        draft.audio.mic_noise_suppression,
+                        val,
+                        draft.audio.mic_noise_gate_db
+                      );
+                    }}
+                  />
+
+                  <div className="space-y-2.5">
+                    <ToggleSwitch
+                      checked={draft.audio.mic_noise_gate_db !== null}
+                      onChange={(en) => {
+                        const gate = en ? -50 : null;
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, mic_noise_gate_db: gate },
+                        }));
+                        applyLiveRnnoise(
+                          draft.audio.mic_noise_suppression,
+                          draft.audio.mic_noise_suppression_strength,
+                          gate
+                        );
+                      }}
+                      label={t.settings.noiseGateTitle(
+                        draft.audio.mic_noise_gate_db !== null
+                          ? `${draft.audio.mic_noise_gate_db} dBFS`
+                          : t.settings.disabledOption
+                      )}
+                    />
+                    {draft.audio.mic_noise_gate_db !== null && (
+                      <AccentSlider
+                        valueBadge={`${draft.audio.mic_noise_gate_db} dBFS`}
+                        min={-80}
+                        max={-20}
+                        step={1}
+                        value={draft.audio.mic_noise_gate_db}
+                        onChange={(g) => {
+                          setDraft((p) => ({
+                            ...p,
+                            audio: { ...p.audio, mic_noise_gate_db: g },
+                          }));
+                          applyLiveRnnoise(
+                            draft.audio.mic_noise_suppression,
+                            draft.audio.mic_noise_suppression_strength,
+                            g
+                          );
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+
+                <div className="border-t border-white/[0.06] pt-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <div className={labelTitleCls}>
+                        {t.settings.micActivationMode}
+                      </div>
+                      <CustomSelect
+                        value={draft.audio.mic_activation_mode.mode}
+                        options={micModeOptions}
+                        onChange={(mode) => {
+                          const prevKey =
+                            draft.audio.mic_activation_mode.mode === "always_on"
+                              ? "V"
+                              : draft.audio.mic_activation_mode.key;
+                          const prevDelay =
+                            draft.audio.mic_activation_mode.mode === "always_on"
+                              ? 150
+                              : draft.audio.mic_activation_mode.release_delay_ms;
+                          setDraft((p) => ({
+                            ...p,
+                            audio: {
+                              ...p.audio,
+                              mic_activation_mode:
+                                mode === "always_on"
+                                  ? { mode: "always_on" }
+                                  : mode === "push_to_talk"
+                                    ? {
+                                        mode: "push_to_talk",
+                                        key: prevKey,
+                                        release_delay_ms: prevDelay,
+                                      }
+                                    : {
+                                        mode: "push_to_mute",
+                                        key: prevKey,
+                                        release_delay_ms: prevDelay,
+                                      },
+                            },
+                          }));
+                        }}
+                        ariaLabel={t.settings.micActivationMode}
+                      />
+                    </div>
+
+                    {draft.audio.mic_activation_mode.mode !== "always_on" && (
+                      <>
+                        <label className="block text-xs text-slate-300">
+                          {t.settings.pttKeyLabel}
+                          <input
+                            type="text"
+                            value={draft.audio.mic_activation_mode.key}
+                            onKeyDown={(e) => {
+                              const combo = keyEventToComboString(e);
+                              if (!combo) return;
+                              e.preventDefault();
+                              setDraft((p) => {
+                                if (
+                                  p.audio.mic_activation_mode.mode ===
+                                  "always_on"
+                                )
+                                  return p;
+                                return {
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    mic_activation_mode: {
+                                      ...p.audio.mic_activation_mode,
+                                      key: combo,
+                                    },
+                                  },
+                                };
+                              });
+                            }}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setDraft((p) => {
+                                if (
+                                  p.audio.mic_activation_mode.mode ===
+                                  "always_on"
+                                )
+                                  return p;
+                                return {
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    mic_activation_mode: {
+                                      ...p.audio.mic_activation_mode,
+                                      key: v,
+                                    },
+                                  },
+                                };
+                              });
+                            }}
+                            className={`${fieldCls} font-mono`}
+                          />
+                        </label>
+
+                        <div className="flex flex-col justify-center">
+                          <AccentSlider
+                            label={t.settings.releaseDelayLabel}
+                            valueBadge={`${draft.audio.mic_activation_mode.release_delay_ms} ${msUnit}`}
+                            min={0}
+                            max={1000}
+                            step={25}
+                            value={
+                              draft.audio.mic_activation_mode.release_delay_ms
+                            }
+                            onChange={(ms) => {
+                              setDraft((p) => {
+                                if (
+                                  p.audio.mic_activation_mode.mode ===
+                                  "always_on"
+                                )
+                                  return p;
+                                return {
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    mic_activation_mode: {
+                                      ...p.audio.mic_activation_mode,
+                                      release_delay_ms: ms,
+                                    },
+                                  },
+                                };
+                              });
+                            }}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </section>
+            </>
+          )}
+
+          {tab === "notifications" && (
+            <>
+              <section className={sectionCls}>
+                <h2 className="text-sm font-bold text-white">
+                  {t.settings.overlayAndSoundTitle}
+                </h2>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <ToggleSwitch
+                    checked={draft.notifications.overlay_toast_enabled}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        notifications: {
+                          ...p.notifications,
+                          overlay_toast_enabled: v,
+                        },
+                      }))
+                    }
+                    label={t.settings.toastOverlayLabel}
+                    hint={t.settings.toastOverlayHint}
+                  />
+
+                  <ToggleSwitch
+                    checked={draft.notifications.sound_enabled}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        notifications: {
+                          ...p.notifications,
+                          sound_enabled: v,
+                        },
+                      }))
+                    }
+                    label={t.settings.rodioSoundLabel}
+                    hint={t.settings.rodioSoundHint}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                  <AccentSlider
+                    label={t.settings.masterNotifVolume}
+                    valueBadge={`${Math.round(
+                      draft.notifications.sound_volume * 100
+                    )}%`}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={draft.notifications.sound_volume}
+                    onChange={(val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        notifications: {
+                          ...p.notifications,
+                          sound_volume: val,
+                        },
+                      }))
+                    }
+                  />
+
+                  <AccentSlider
+                    label={t.settings.toastDurationLabel}
+                    valueBadge={`${(
+                      draft.notifications.overlay_duration_ms / 1000
+                    ).toFixed(1)} ${t.secWord}`}
+                    min={1000}
+                    max={8000}
+                    step={250}
+                    value={draft.notifications.overlay_duration_ms}
+                    onChange={(val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        notifications: {
+                          ...p.notifications,
+                          overlay_duration_ms: val,
+                        },
+                      }))
+                    }
+                  />
+                </div>
+              </section>
+
+              <section className={sectionCls}>
+                <h2 className="text-sm font-bold text-white">
+                  {t.settings.eventSoundsTitle}
+                </h2>
+                <div className="space-y-2.5">
+                  {(
+                    [
+                      ["clip_saved", t.settings.evClipSaved],
+                      ["recording_started", t.settings.evRecStarted],
+                      ["recording_stopped", t.settings.evRecStopped],
+                      ["marker_added", t.settings.evMarkerAdded],
+                    ] as [SoundNotificationKind, string][]
+                  ).map(([kind, label]) => {
+                    const entry = draft.notifications.sounds[kind];
+                    return (
+                      <div
+                        key={kind}
+                        className="rounded-xl bg-white/[0.025] p-3 ring-1 ring-white/[0.06]"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <span className="text-xs font-semibold text-white">
+                            {label}
+                          </span>
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <CustomSelect
+                              value={entry.source.kind}
+                              options={soundKindOptions}
+                              onChange={(k) =>
+                                updateSoundEntry(kind, (prev) => ({
+                                  ...prev,
+                                  source:
+                                    k === "preset"
+                                      ? { kind: "preset", value: "chime" }
+                                      : k === "custom_file"
+                                        ? { kind: "custom_file", value: "" }
+                                        : { kind: "silent" },
+                                }))
+                              }
+                              className="w-44"
+                              menuMinWidth={175}
+                              ariaLabel={label}
+                            />
+
+                            {entry.source.kind === "preset" && (
+                              <CustomSelect
+                                value={entry.source.value}
+                                options={soundPresetOptions}
+                                onChange={(val) =>
+                                  updateSoundEntry(kind, (prev) => ({
+                                    ...prev,
+                                    source: { kind: "preset", value: val },
+                                  }))
+                                }
+                                className="w-40"
+                                menuMinWidth={165}
+                                ariaLabel={label}
+                              />
+                            )}
+
+                            {entry.source.kind === "custom_file" && (
+                              <input
+                                type="text"
+                                value={entry.source.value}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  updateSoundEntry(kind, (prev) => ({
+                                    ...prev,
+                                    source: {
+                                      kind: "custom_file",
+                                      value: val,
+                                    },
+                                  }));
+                                }}
+                                placeholder="C:\Sounds\notify.wav"
+                                className="w-56 rounded-xl bg-black/35 px-2.5 py-1.5 font-mono text-xs text-white ring-1 ring-white/[0.08] outline-none focus:ring-[var(--accent)]"
+                              />
+                            )}
+
+                            <AccentSlider
+                              className="w-32"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={entry.volume}
+                              valueBadge={`${Math.round(entry.volume * 100)}%`}
+                              onChange={(vol) =>
+                                updateSoundEntry(kind, (prev) => ({
+                                  ...prev,
+                                  volume: vol,
+                                }))
+                              }
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() => void handleTestSound(kind)}
+                              className="inline-flex items-center gap-1 rounded-xl bg-[rgb(var(--accent-rgb)/0.2)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-hover)] transition hover:bg-[var(--accent)] hover:text-white"
+                            >
+                              <Volume2 className="h-3.5 w-3.5" />
+                              {t.settings.testSoundBtn}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </>
+          )}
+
+          {tab === "appearance" && (
+            <>
+              {/* Interface Language Switcher */}
+              <section className={sectionCls}>
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-start gap-2.5">
+                    <Globe className="mt-0.5 h-4 w-4 text-[var(--accent-hover)]" />
+                    <div>
+                      <h2 className="text-sm font-bold text-white">
+                        {t.settings.languageTitle}
+                      </h2>
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        {t.settings.languageHint}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {(
+                      [
+                        ["ru", t.settings.languageRu],
+                        ["en", t.settings.languageEn],
+                      ] as [AppLanguage, string][]
+                    ).map(([code, label]) => {
+                      const active = lang === code;
+                      return (
+                        <button
+                          key={code}
+                          type="button"
+                          onClick={() => handleSelectLanguage(code)}
+                          className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-semibold transition ${
+                            active
+                              ? "bg-[var(--accent)] text-white shadow"
+                              : "bg-white/[0.05] text-slate-300 ring-1 ring-white/[0.08] hover:bg-white/[0.1] hover:text-white"
+                          }`}
+                        >
+                          {active && <Check className="h-3.5 w-3.5" />}
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+
+              {/* 8 Theme Presets + Custom Theme Gallery & Builder */}
+              <section className={sectionCls}>
+                <div>
+                  <h2 className="text-sm font-bold text-white">
+                    {t.settings.themeTitle}
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {t.settings.themeSubtitle}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {THEME_PRESETS.map((preset) => {
+                    const selected = draft.theme === preset.id;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => {
+                          setDraft((p) => ({ ...p, theme: preset.id }));
+                          onPreviewCustomTheme(null);
+                          onPreviewTheme(preset.id);
+                        }}
+                        className={`group flex flex-col gap-2.5 rounded-2xl p-3 text-left transition ${
+                          selected
+                            ? "bg-[rgb(var(--accent-rgb)/0.14)] ring-2 ring-[var(--accent)]"
+                            : "bg-white/[0.025] ring-1 ring-white/[0.07] hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <div
+                          className="relative flex h-16 w-full overflow-hidden rounded-xl ring-1 ring-white/10"
+                          style={{ backgroundColor: preset.bgApp }}
+                        >
+                          <div
+                            className="flex w-12 flex-col gap-1 border-r border-white/10 p-1.5"
+                            style={{ backgroundColor: preset.bgPanel }}
+                          >
+                            <div
+                              className="h-2 w-full rounded"
+                              style={{ backgroundColor: preset.accent }}
+                            />
+                            <div className="h-1.5 w-4/5 rounded bg-white/15" />
+                            <div className="h-1.5 w-3/5 rounded bg-white/10" />
+                          </div>
+                          <div className="flex flex-1 flex-col gap-1.5 p-2">
+                            <div className="flex items-center justify-between">
+                              <div className="h-1.5 w-14 rounded bg-white/25" />
+                              <div
+                                className="h-2.5 w-6 rounded-full"
+                                style={{ backgroundColor: preset.accent }}
+                              />
+                            </div>
+                            <div className="grid flex-1 grid-cols-2 gap-1.5">
+                              <div
+                                className="rounded-md ring-1 ring-white/10"
+                                style={{ backgroundColor: preset.bgCard }}
+                              />
+                              <div
+                                className="rounded-md ring-1 ring-white/10"
+                                style={{ backgroundColor: preset.bgCard }}
+                              />
+                            </div>
+                          </div>
+                          {selected && (
+                            <span
+                              className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full text-white shadow"
+                              style={{ backgroundColor: preset.accent }}
+                            >
+                              <Check className="h-3 w-3" />
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-bold text-white">
+                              {preset.name}
+                            </div>
+                            <div className="truncate text-[11px] text-slate-400">
+                              {lang === "en" ? preset.descEn : preset.descRu}
+                            </div>
+                          </div>
+                          <span
+                            className="h-3.5 w-3.5 shrink-0 rounded-full ring-2 ring-white/20"
+                            style={{ backgroundColor: preset.accent }}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+
+                  {/* 9th Card: Custom Theme */}
+                  {(() => {
+                    const selected = draft.theme === "custom";
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextCustom = normalizeCustomColors(
+                            draft.custom_theme
+                          );
+                          setDraft((p) => ({
+                            ...p,
+                            theme: "custom",
+                            custom_theme: nextCustom,
+                          }));
+                          onPreviewTheme("custom");
+                          onPreviewCustomTheme(nextCustom);
+                        }}
+                        className={`group flex flex-col gap-2.5 rounded-2xl p-3 text-left transition ${
+                          selected
+                            ? "bg-[rgb(var(--accent-rgb)/0.14)] ring-2 ring-[var(--accent)]"
+                            : "bg-white/[0.025] ring-1 ring-white/[0.07] hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <div
+                          className="relative flex h-16 w-full overflow-hidden rounded-xl ring-1 ring-white/10"
+                          style={{ backgroundColor: customPreviewColors.bg_app }}
+                        >
+                          <div
+                            className="flex w-12 flex-col gap-1 border-r border-white/10 p-1.5"
+                            style={{
+                              backgroundColor: customPreviewColors.bg_panel,
+                            }}
+                          >
+                            <div
+                              className="h-2 w-full rounded"
+                              style={{
+                                backgroundColor: customPreviewColors.accent,
+                              }}
+                            />
+                            <div className="h-1.5 w-4/5 rounded bg-white/15" />
+                            <div className="h-1.5 w-3/5 rounded bg-white/10" />
+                          </div>
+                          <div className="flex flex-1 flex-col gap-1.5 p-2">
+                            <div className="flex items-center justify-between">
+                              <div
+                                className="h-1.5 w-14 rounded opacity-70"
+                                style={{
+                                  backgroundColor:
+                                    customPreviewColors.text_primary,
+                                }}
+                              />
+                              <div
+                                className="h-2.5 w-6 rounded-full"
+                                style={{
+                                  backgroundColor: customPreviewColors.accent,
+                                }}
+                              />
+                            </div>
+                            <div className="grid flex-1 grid-cols-2 gap-1.5">
+                              <div
+                                className="rounded-md ring-1 ring-white/10"
+                                style={{
+                                  backgroundColor: customPreviewColors.bg_panel,
+                                }}
+                              />
+                              <div
+                                className="rounded-md ring-1 ring-white/10"
+                                style={{
+                                  backgroundColor: customPreviewColors.bg_panel,
+                                }}
+                              />
+                            </div>
+                          </div>
+                          {selected && (
+                            <span
+                              className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full text-white shadow"
+                              style={{
+                                backgroundColor: customPreviewColors.accent,
+                              }}
+                            >
+                              <Check className="h-3 w-3" />
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-xs font-bold text-white">
+                              {t.settings.customThemeTitle}
+                            </div>
+                            <div className="truncate text-[11px] text-slate-400">
+                              {t.settings.customThemeDesc}
+                            </div>
+                          </div>
+                          <span
+                            className="h-3.5 w-3.5 shrink-0 rounded-full ring-2 ring-white/20"
+                            style={{
+                              backgroundColor: customPreviewColors.accent,
+                            }}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })()}
+                </div>
+
+                {/* Live Custom Theme Builder */}
+                <div className="rounded-2xl bg-black/25 p-4 ring-1 ring-white/[0.06]">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-xs font-bold text-white">
+                        {t.settings.customThemeTitle}
+                      </h3>
+                      <p className="text-[11px] text-slate-400">
+                        {t.settings.customThemeDesc}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleResetCustomTheme}
+                      className={actionChipBtn}
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      {t.settings.customThemeReset}
+                    </button>
+                  </div>
+
+                  <div className="mt-3.5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    {customColorFields.map(({ key, label }) => {
+                      const pickerVal = customPreviewColors[key];
+                      const textVal = hexInputs[key];
+                      const valid = isValidHex(textVal);
+                      return (
+                        <div
+                          key={key}
+                          className="rounded-xl bg-white/[0.03] p-2.5 ring-1 ring-white/[0.07]"
+                        >
+                          <div className="mb-2 text-[11px] font-medium text-slate-300">
+                            {label}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={pickerVal}
+                              onChange={(e) =>
+                                handleCustomColorInput(key, e.target.value)
+                              }
+                              aria-label={label}
+                              className="h-8 w-10 shrink-0 cursor-pointer rounded-lg border-0 bg-transparent p-0"
+                            />
+                            <input
+                              type="text"
+                              maxLength={7}
+                              value={textVal}
+                              onChange={(e) =>
+                                handleCustomColorInput(key, e.target.value)
+                              }
+                              onBlur={() =>
+                                setHexInputs(
+                                  normalizeCustomColors(draft.custom_theme)
+                                )
+                              }
+                              className={`min-w-0 flex-1 rounded-lg bg-black/40 px-2.5 py-1.5 font-mono text-xs text-white ring-1 outline-none ${
+                                valid
+                                  ? "ring-white/[0.1] focus:ring-[var(--accent)]"
+                                  : "ring-rose-500/70"
+                              }`}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+
+              <section className={sectionCls}>
+                <h2 className="text-sm font-bold text-white">
+                  {t.settings.systemTitle}
+                </h2>
+                <ToggleSwitch
+                  checked={draft.launch_at_startup}
+                  onChange={(v) =>
+                    setDraft((p) => ({
+                      ...p,
+                      launch_at_startup: v,
+                    }))
+                  }
+                  label={t.settings.autostartLabel}
+                  hint={t.settings.autostartHint}
+                />
+              </section>
+            </>
+          )}
+
+          {tab === "hotkeys_storage" && (
+            <>
+              <section className={sectionCls}>
+                <div className="flex items-center gap-2">
+                  <Keyboard className="h-4 w-4 text-[var(--accent-hover)]" />
+                  <h2 className="text-sm font-bold text-white">
+                    {t.settings.hotkeysTitle}
+                  </h2>
+                </div>
+                <div className="space-y-2">
+                  {renderHotkeyInput(
+                    "save_clip",
+                    t.settings.hkSaveClip,
+                    draft.hotkeys.save_clip,
+                    (val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        hotkeys: { ...p.hotkeys, save_clip: val },
+                      }))
+                  )}
+                  {renderHotkeyInput(
+                    "toggle_session",
+                    t.settings.hkToggleSession,
+                    draft.hotkeys.toggle_session,
+                    (val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        hotkeys: { ...p.hotkeys, toggle_session: val },
+                      }))
+                  )}
+                  {renderHotkeyInput(
+                    "add_bookmark",
+                    t.settings.hkAddBookmark,
+                    draft.hotkeys.add_bookmark,
+                    (val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        hotkeys: { ...p.hotkeys, add_bookmark: val },
+                      }))
+                  )}
+                  {renderHotkeyInput(
+                    "toggle_mic_mute",
+                    t.settings.hkMicMute,
+                    draft.hotkeys.toggle_mic_mute,
+                    (val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        hotkeys: { ...p.hotkeys, toggle_mic_mute: val },
+                      }))
+                  )}
+                  {renderHotkeyInput(
+                    "toggle_privacy_mode",
+                    t.settings.hkPrivacy,
+                    draft.hotkeys.toggle_privacy_mode,
+                    (val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        hotkeys: { ...p.hotkeys, toggle_privacy_mode: val },
+                      }))
+                  )}
+                </div>
+              </section>
+
+              {/* Editor Heavy Cache Control Section */}
+              <section className={sectionCls}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-[var(--accent-hover)]" />
+                    <div>
+                      <h2 className="text-sm font-bold text-white">
+                        {t.settings.editorCacheTitle}
+                      </h2>
+                      <p className="text-[11px] text-slate-400">
+                        {t.settings.editorCacheSubtitle}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void refreshCacheStats()}
+                    className={actionChipBtn}
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    {t.settings.recalculateBtn}
+                  </button>
+                </div>
+
+                {/* Live Cache Size Breakdown */}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl bg-black/25 p-3.5 ring-1 ring-white/[0.06]">
+                    <div className="text-[11px] font-medium text-slate-400">
+                      {t.settings.tempCacheCardLabel}
+                    </div>
+                    <div className="mt-1 flex items-baseline justify-between">
+                      <span className="font-mono text-base font-bold text-white">
+                        {formatBytes(cacheStats.temp_bytes, lang)}
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        {t.filesCount(cacheStats.temp_file_count)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl bg-black/25 p-3.5 ring-1 ring-white/[0.06]">
+                    <div className="text-[11px] font-medium text-slate-400">
+                      {t.settings.metadataCardLabel}
+                    </div>
+                    <div className="mt-1 flex items-baseline justify-between">
+                      <span className="font-mono text-base font-bold text-emerald-300">
+                        {formatBytes(cacheStats.metadata_bytes, lang)}
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        {t.filesCount(cacheStats.metadata_file_count)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Cleanup Mode Radio Cards */}
+                <div className="grid grid-cols-1 gap-2.5 md:grid-cols-3">
+                  {(
+                    [
+                      [
+                        "on_close",
+                        t.settings.cacheModeOnClose,
+                        t.settings.cacheModeOnCloseDesc,
+                      ],
+                      [
+                        "timer_and_limit",
+                        t.settings.cacheModeTimer,
+                        t.settings.cacheModeTimerDesc,
+                      ],
+                      [
+                        "manual",
+                        t.settings.cacheModeManual,
+                        t.settings.cacheModeManualDesc,
+                      ],
+                    ] as [CacheCleanupMode, string, string][]
+                  ).map(([modeId, title, desc]) => {
+                    const active = draft.storage.editor_cache.mode === modeId;
+                    return (
+                      <button
+                        key={modeId}
+                        type="button"
+                        onClick={() =>
+                          setDraft((p) => ({
+                            ...p,
+                            storage: {
+                              ...p.storage,
+                              editor_cache: {
+                                ...p.storage.editor_cache,
+                                mode: modeId,
+                              },
+                            },
+                          }))
+                        }
+                        className={`rounded-xl p-3 text-left transition ${
+                          active
+                            ? "bg-[rgb(var(--accent-rgb)/0.16)] ring-2 ring-[var(--accent)]"
+                            : "bg-white/[0.025] ring-1 ring-white/[0.06] hover:bg-white/[0.05]"
+                        }`}
+                      >
+                        <div className="text-xs font-semibold text-white">
+                          {title}
+                        </div>
+                        <div className="mt-1 text-[11px] leading-snug text-slate-400">
+                          {desc}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {draft.storage.editor_cache.mode === "timer_and_limit" && (
+                  <div className="grid grid-cols-1 gap-4 rounded-xl bg-black/25 p-4 ring-1 ring-white/[0.06] md:grid-cols-2">
+                    <div>
+                      <div className="flex items-center justify-between text-xs text-slate-300">
+                        <span>{t.settings.checkIntervalLabel}</span>
+                        <span className="rounded-lg bg-[rgb(var(--accent-rgb)/0.16)] px-2 py-0.5 font-mono text-[11px] font-bold text-[var(--accent-hover)] ring-1 ring-[rgb(var(--accent-rgb)/0.32)]">
+                          {draft.storage.editor_cache.interval_minutes}{" "}
+                          {t.minWord}
+                        </span>
+                      </div>
+                      <div className="mt-2.5 flex items-center gap-1.5">
+                        {[15, 30, 60].map((mins) => (
+                          <button
+                            key={mins}
+                            type="button"
+                            onClick={() =>
+                              setDraft((p) => ({
+                                ...p,
+                                storage: {
+                                  ...p.storage,
+                                  editor_cache: {
+                                    ...p.storage.editor_cache,
+                                    interval_minutes: mins,
+                                  },
+                                },
+                              }))
+                            }
+                            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                              draft.storage.editor_cache.interval_minutes ===
+                              mins
+                                ? "bg-[var(--accent)] text-white"
+                                : "bg-white/[0.06] text-slate-300 hover:bg-white/[0.1]"
+                            }`}
+                          >
+                            {mins}
+                            {minShortUnit}
+                          </button>
+                        ))}
+                        <input
+                          type="number"
+                          min={5}
+                          max={1440}
+                          value={draft.storage.editor_cache.interval_minutes}
+                          onChange={(e) => {
+                            const val = Math.max(
+                              5,
+                              Math.min(1440, Number(e.target.value) || 30)
+                            );
+                            setDraft((p) => ({
+                              ...p,
+                              storage: {
+                                ...p.storage,
+                                editor_cache: {
+                                  ...p.storage.editor_cache,
+                                  interval_minutes: val,
+                                },
+                              },
+                            }));
+                          }}
+                          className="ml-auto w-20 rounded-lg bg-black/40 px-2.5 py-1 text-xs text-white ring-1 ring-white/[0.08] outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      <AccentSlider
+                        label={t.settings.cacheLimitLabel}
+                        valueBadge={`${draft.storage.editor_cache.max_size_mb} ${t.mbWord}`}
+                        min={50}
+                        max={2048}
+                        step={50}
+                        value={draft.storage.editor_cache.max_size_mb}
+                        onChange={(val) =>
+                          setDraft((p) => ({
+                            ...p,
+                            storage: {
+                              ...p.storage,
+                              editor_cache: {
+                                ...p.storage.editor_cache,
+                                max_size_mb: val,
+                              },
+                            },
+                          }))
+                        }
+                      />
+                      <div className="flex items-center gap-1.5">
+                        {[100, 250, 500].map((mb) => (
+                          <button
+                            key={mb}
+                            type="button"
+                            onClick={() =>
+                              setDraft((p) => ({
+                                ...p,
+                                storage: {
+                                  ...p.storage,
+                                  editor_cache: {
+                                    ...p.storage.editor_cache,
+                                    max_size_mb: mb,
+                                  },
+                                },
+                              }))
+                            }
+                            className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                              draft.storage.editor_cache.max_size_mb === mb
+                                ? "bg-[var(--accent)] text-white"
+                                : "bg-white/[0.06] text-slate-300 hover:bg-white/[0.1]"
+                            }`}
+                          >
+                            {mb} {t.mbWord}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] pt-3">
+                  <span className="truncate font-mono text-[11px] text-slate-400">
+                    {draft.storage.temp_dir}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={clearingCache}
+                    onClick={() => void handleClearEditorCacheNow()}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[rgb(var(--accent-rgb)/0.18)] px-3.5 py-2 text-xs font-semibold text-[var(--accent-hover)] ring-1 ring-[rgb(var(--accent-rgb)/0.4)] transition hover:bg-[var(--accent)] hover:text-white disabled:opacity-50"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {clearingCache
+                      ? t.settings.clearingCache
+                      : t.settings.clearCacheNowBtn}
+                  </button>
+                </div>
+              </section>
+
+              <section className={sectionCls}>
+                <h2 className="text-sm font-bold text-white">
+                  {t.settings.diskAndQuotaTitle}
+                </h2>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-xs text-slate-300">
+                      {t.settings.outputDirLabel}
+                      <div className="mt-1.5 flex gap-2">
+                        <input
+                          type="text"
+                          value={draft.storage.output_dir}
+                          onChange={(e) =>
+                            setDraft((p) => ({
+                              ...p,
+                              storage: {
+                                ...p.storage,
+                                output_dir: e.target.value,
+                              },
+                            }))
+                          }
+                          className="flex-1 rounded-xl bg-black/35 px-3 py-2 font-mono text-xs text-white ring-1 ring-white/[0.08] outline-none focus:ring-[var(--accent)]"
+                        />
+                        <button
+                          type="button"
+                          onClick={onOpenFolder}
+                          className="rounded-xl bg-white/[0.06] px-3.5 text-xs font-medium text-slate-200 transition hover:bg-white/[0.12] hover:text-white"
+                        >
+                          {t.settings.openBtn}
+                        </button>
+                      </div>
+                    </label>
+                  </div>
+
+                  <label className="block text-xs text-slate-300">
+                    {t.settings.tempDirLabel}
+                    <input
+                      type="text"
+                      value={draft.storage.temp_dir}
+                      onChange={(e) =>
+                        setDraft((p) => ({
+                          ...p,
+                          storage: { ...p.storage, temp_dir: e.target.value },
+                        }))
+                      }
+                      className={`${fieldCls} font-mono`}
+                    />
+                  </label>
+
+                  <label className="block text-xs text-slate-300">
+                    {t.settings.maxStorageLabel}
+                    <input
+                      type="number"
+                      min={1}
+                      placeholder={t.settings.noLimitPlaceholder}
+                      value={draft.storage.max_storage_gb ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value
+                          ? Math.max(1, Number(e.target.value))
+                          : null;
+                        setDraft((p) => ({
+                          ...p,
+                          storage: { ...p.storage, max_storage_gb: val },
+                        }));
+                      }}
+                      className={fieldCls}
+                    />
+                  </label>
+
+                  <label className="block text-xs text-slate-300">
+                    {t.settings.maxAgeLabel}
+                    <input
+                      type="number"
+                      min={1}
+                      placeholder={t.settings.noAgeLimitPlaceholder}
+                      value={draft.storage.max_age_days ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value
+                          ? Math.max(1, Number(e.target.value))
+                          : null;
+                        setDraft((p) => ({
+                          ...p,
+                          storage: { ...p.storage, max_age_days: val },
+                        }));
+                      }}
+                      className={fieldCls}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.06] pt-3">
+                  <div className="min-w-[260px] flex-1">
+                    <ToggleSwitch
+                      checked={draft.storage.auto_remux_fmp4}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          storage: { ...p.storage, auto_remux_fmp4: v },
+                        }))
+                      }
+                      label={t.settings.autoRemuxLabel}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleCleanupNow()}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500/15 px-3.5 py-2 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/35 transition hover:bg-amber-500 hover:text-slate-950"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {t.settings.cleanupDiskBtn}
+                  </button>
+                </div>
+              </section>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

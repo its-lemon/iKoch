@@ -1,0 +1,20 @@
+[package]
+name = "core-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-types.workspace = true
+crossbeam-channel.workspace = true
+nnnoiseless.workspace = true
+parking_lot.workspace = true
+rubato.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+wasapi.workspace = true
+windows.workspace = true

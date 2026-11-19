@@ -1,0 +1,31 @@
+[package]
+name = "recorder-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+core-types.workspace = true
+core-capture.workspace = true
+core-encode.workspace = true
+core-audio.workspace = true
+core-mux.workspace = true
+chrono.workspace = true
+crossbeam-channel.workspace = true
+global-hotkey.workspace = true
+parking_lot.workspace = true
+rodio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+windows.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
