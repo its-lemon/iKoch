@@ -285,4 +285,108 @@ mod tests {
             rb.gop_count()
         );
     }
+
+    #[test]
+    fn source_switch_and_pause_resume_preserve_audio_across_three_clips(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = std::env::temp_dir().join(format!("ikoch_switch_3clips_{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir)?;
+
+        let mut enc_mixed = core_audio::MfAacEncoder::new(TrackKind::AudioMixed, 128)?;
+        let mut enc_game = core_audio::MfAacEncoder::new(TrackKind::AudioGame, 128)?;
+        let mut enc_mic = core_audio::MfAacEncoder::new(TrackKind::AudioMic, 96)?;
+
+        let mut router = PacketRouter::new(30, 64 * 1024 * 1024)?;
+        router.update_audio_header(enc_mixed.stream_header().clone());
+        router.update_audio_header(enc_game.stream_header().clone());
+        router.update_audio_header(enc_mic.stream_header().clone());
+
+        let mut next_block_idx: u64 = 0;
+        let mut push_av_segment = |router: &mut PacketRouter,
+                                   start_pts_us: i64,
+                                   audio_delay_us: i64,
+                                   width: u32,
+                                   height: u32|
+         -> Result<(), Box<dyn std::error::Error>> {
+            let mut vh = dummy_headers().video;
+            vh.width = width;
+            vh.height = height;
+            router.update_video_header(vh);
+
+            router.push_packet(dummy_video_pkt(1, start_pts_us, true, 128));
+            router.push_packet(dummy_video_pkt(2, start_pts_us + 500_000, false, 64));
+
+            for _ in 0..48u64 {
+                let pts_us = start_pts_us
+                    + audio_delay_us
+                    + core_audio::sample_index_to_pts_us(
+                        0,
+                        (next_block_idx % 48) * (core_audio::AAC_FRAME_SAMPLES as u64),
+                    );
+                let mut pcm = [0i16; core_audio::AAC_FRAME_SAMPLES * core_audio::TARGET_CHANNELS];
+                for f in 0..core_audio::AAC_FRAME_SAMPLES {
+                    let sample_idx =
+                        next_block_idx * (core_audio::AAC_FRAME_SAMPLES as u64) + (f as u64);
+                    let t = (sample_idx as f32) / 48_000.0;
+                    let s =
+                        ((0.30 * (2.0 * std::f32::consts::PI * 440.0 * t).sin()) * 32_767.0) as i16;
+                    pcm[f * 2] = s;
+                    pcm[f * 2 + 1] = s;
+                }
+                next_block_idx += 1;
+                for p in enc_mixed.encode_pcm_block(&pcm, pts_us)? {
+                    router.push_packet(p);
+                }
+                for p in enc_game.encode_pcm_block(&pcm, pts_us)? {
+                    router.push_packet(p);
+                }
+                for p in enc_mic.encode_pcm_block(&pcm, pts_us)? {
+                    router.push_packet(p);
+                }
+            }
+            router.push_packet(dummy_video_pkt(3, start_pts_us + 1_000_000, true, 128));
+            Ok(())
+        };
+
+        // 1. Monitor capture -> save Clip 1
+        push_av_segment(&mut router, 0, 0, 1920, 1080)?;
+        let clip1 = temp_dir.join("clip1_monitor.mp4");
+        let sum1 = router.save_replay_clip(&clip1)?;
+        assert!(sum1.mixed_pkts > 0 && sum1.game_pkts > 0 && sum1.mic_pkts > 0);
+
+        // 2. Switch target (Monitor -> AutoGame) WITHOUT re-sending AudioHeaders, audio starts +40ms after IDR -> save Clip 2
+        router.on_source_reset();
+        push_av_segment(&mut router, 5_000_000, 40_000, 2560, 1440)?;
+        let clip2 = temp_dir.join("clip2_autogame.mp4");
+        let sum2 = router.save_replay_clip(&clip2)?;
+        assert!(sum2.mixed_pkts > 0 && sum2.game_pkts > 0 && sum2.mic_pkts > 0);
+
+        // 3. Pause & Resume (AutoGame -> Monitor) -> save Clip 3
+        router.on_source_reset();
+        push_av_segment(&mut router, 10_000_000, 25_000, 1920, 1080)?;
+        let clip3 = temp_dir.join("clip3_resumed.mp4");
+        let sum3 = router.save_replay_clip(&clip3)?;
+        assert!(sum3.mixed_pkts > 0 && sum3.game_pkts > 0 && sum3.mic_pkts > 0);
+
+        for clip in [&clip1, &clip2, &clip3] {
+            let report = core_audio::verify_mp4_audio_with_mf_source_reader(clip)?;
+            assert_eq!(report.sample_rate_hz, 48_000);
+            assert_eq!(report.channels, 2);
+            assert!(
+                report.decoded_frames >= 35_000,
+                "expected full decoded audio in '{}', got {} frames",
+                clip.display(),
+                report.decoded_frames
+            );
+            assert!(
+                report.peak_linear > 0.10,
+                "expected audible peak in '{}', got {}",
+                clip.display(),
+                report.peak_linear
+            );
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        Ok(())
+    }
 }

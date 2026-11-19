@@ -50,6 +50,8 @@ const BLOCK_DURATION_US: u128 = 21_333;
 const MIXER_SLOT_LATE_DEADLINE_US: i64 = 120_000;
 /// Backoff between WASAPI reopen attempts on disconnect / unavailable device.
 const WASAPI_RECONNECT_BACKOFF: Duration = Duration::from_millis(750);
+/// If `GameProcessOnly` produces 0 non-zero frames in 3 seconds, fall back to `DefaultDevice`.
+const GAME_PROCESS_SILENCE_FALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// RAII guard configuring MTA COM, 1 ms OS timer resolution, and Windows MMCSS `"Pro Audio"` priority.
 struct AudioThreadGuard {
@@ -765,6 +767,7 @@ struct OpenedWasapiStream {
     description: String,
     scratch: Vec<u8>,
     first_live_packet_seen: bool,
+    is_process_loopback: bool,
 }
 
 impl OpenedWasapiStream {
@@ -831,13 +834,20 @@ fn run_source_capture_loop(
     let mut stream: Option<OpenedWasapiStream> = None;
     let mut last_open_attempt = Instant::now() - Duration::from_secs(10);
     let mut force_reopen = false;
+    let mut process_loopback_started_at: Option<Instant> = None;
+    let mut process_loopback_nonzero_seen = false;
+    let mut process_loopback_fallback_active = false;
 
     if !role.is_intentionally_idle() {
         last_open_attempt = Instant::now();
-        match open_wasapi_stream(&role) {
+        match open_wasapi_stream(&role, !process_loopback_fallback_active) {
             Ok(opened) => {
                 info!("Opened audio capture ({:?}): {}", slot, opened.description);
                 telemetry.set_active_device(opened.description.clone());
+                if opened.is_process_loopback {
+                    process_loopback_started_at = Some(Instant::now());
+                    process_loopback_nonzero_seen = false;
+                }
                 stream = Some(opened);
             }
             Err(err) => {
@@ -884,6 +894,9 @@ fn run_source_capture_loop(
                         if *mode != new_mode {
                             info!("Switching AudioOutputMode to {:?}", new_mode);
                             *mode = new_mode;
+                            process_loopback_fallback_active = false;
+                            process_loopback_nonzero_seen = false;
+                            process_loopback_started_at = None;
                             force_reopen = true;
                         }
                     }
@@ -892,6 +905,9 @@ fn run_source_capture_loop(
                     if let SourceRole::GameLoopback { mode, target_pid } = &mut role {
                         if *target_pid != new_pid {
                             *target_pid = new_pid;
+                            process_loopback_fallback_active = false;
+                            process_loopback_nonzero_seen = false;
+                            process_loopback_started_at = None;
                             if *mode == AudioOutputMode::GameProcessOnly {
                                 force_reopen = true;
                             }
@@ -972,7 +988,7 @@ fn run_source_capture_loop(
             force_reopen = false;
             last_open_attempt = Instant::now();
 
-            match open_wasapi_stream(&role) {
+            match open_wasapi_stream(&role, !process_loopback_fallback_active) {
                 Ok(mut opened) => {
                     opened.drain_stale_and_reset_resampler();
                     info!("Opened audio capture ({:?}): {}", slot, opened.description);
@@ -980,6 +996,12 @@ fn run_source_capture_loop(
                     last_real_packet_at = Instant::now();
                     silent_since = None;
                     silent_blocks_emitted = 0;
+                    if opened.is_process_loopback {
+                        process_loopback_started_at = Some(Instant::now());
+                        process_loopback_nonzero_seen = false;
+                    } else {
+                        process_loopback_started_at = None;
+                    }
                     let target_blocks = elapsed_48k_frames(base_pts_us, clock.now_us())
                         / (AAC_FRAME_SAMPLES as u64);
                     if target_blocks > block_idx {
@@ -1070,6 +1092,12 @@ fn run_source_capture_loop(
                         denoiser.process_stereo_1024(&mut f32_block);
                     }
                 }
+                if s.is_process_loopback
+                    && !process_loopback_nonzero_seen
+                    && f32_block.iter().any(|&v| v.abs() > 1e-6)
+                {
+                    process_loopback_nonzero_seen = true;
+                }
                 telemetry.observe_peak_f32(&f32_block);
                 let this_idx = block_idx;
                 block_idx = block_idx.saturating_add(1);
@@ -1078,6 +1106,23 @@ fn run_source_capture_loop(
                     block_idx: this_idx,
                     samples: f32_block,
                 });
+            }
+
+            if s.is_process_loopback
+                && !process_loopback_nonzero_seen
+                && !process_loopback_fallback_active
+                && process_loopback_started_at
+                    .is_some_and(|started| started.elapsed() >= GAME_PROCESS_SILENCE_FALLBACK_TIMEOUT)
+            {
+                warn!(
+                    "GameProcessOnly produced 0 non-zero audio frames in first {}s; falling back to DefaultDevice",
+                    GAME_PROCESS_SILENCE_FALLBACK_TIMEOUT.as_secs()
+                );
+                let _ = warn_tx.try_send(AudioOutputEvent::RecoverableWarning(
+                    "GameProcessOnly received no audio in 3s; falling back to DefaultDevice".to_string(),
+                ));
+                process_loopback_fallback_active = true;
+                force_reopen = true;
             }
         } else {
             thread::sleep(Duration::from_millis(10));
@@ -1088,10 +1133,13 @@ fn run_source_capture_loop(
                 .take()
                 .map(|s| s.description)
                 .unwrap_or_else(|| format!("{slot:?}"));
+            warn!(
+                "WASAPI stream invalidated/disconnected ({slot:?}, last={desc}); scheduling reopen with fresh format"
+            );
             let _ = warn_tx.try_send(AudioOutputEvent::RecoverableWarning(format!(
                 "Audio device disconnected ({desc}), reconnecting"
             )));
-            last_open_attempt = Instant::now();
+            last_open_attempt = Instant::now() - WASAPI_RECONNECT_BACKOFF + Duration::from_millis(150);
         }
 
         // 4. Real-Instant silence injection only after >= 110 ms of genuine WASAPI inactivity.
@@ -1382,13 +1430,9 @@ fn run_mixer_loop(
             let sec_ready = !cfg.secondary_enabled || sec_queue.contains_key(&next_mix_idx);
             let all_ready = game_ready && mic_ready && sec_ready;
 
-            if !(all_ready
-                || (past_deadline
-                    && (game_queue.contains_key(&next_mix_idx)
-                        || mic_queue.contains_key(&next_mix_idx)
-                        || sec_queue.contains_key(&next_mix_idx)
-                        || (!cfg.game_enabled && !cfg.mic_enabled && !cfg.secondary_enabled))))
-            {
+            // Never stall the mixer past `MIXER_SLOT_LATE_DEADLINE_US`: even if a source
+            // disconnected, hung, or skipped `block_idx` on reopen, substitute silence and advance.
+            if !all_ready && !past_deadline {
                 break;
             }
 
@@ -1640,27 +1684,32 @@ impl OpenedWasapiStream {
             description,
             scratch,
             first_live_packet_seen: false,
+            is_process_loopback: false,
         })
     }
 }
 
-fn open_wasapi_stream(role: &SourceRole) -> Result<OpenedWasapiStream, AudioError> {
+fn open_wasapi_stream(
+    role: &SourceRole,
+    allow_process_loopback: bool,
+) -> Result<OpenedWasapiStream, AudioError> {
     let enumerator = DeviceEnumerator::new().map_err(|e| {
         AudioError::WasapiInitFailed(format!("DeviceEnumerator::new failed: {e}"))
     })?;
 
     match role {
         SourceRole::GameLoopback { mode, target_pid } => {
-            if *mode == AudioOutputMode::GameProcessOnly {
+            if *mode == AudioOutputMode::GameProcessOnly && allow_process_loopback {
                 if let Some(pid) = *target_pid {
                     let desired = WaveFormat::new(32, 32, SampleType::Float, 48_000, 2, None);
                     if let Ok(client) = AudioClient::new_application_loopback_client(pid, true) {
-                        if let Ok(opened) = OpenedWasapiStream::open_with_client(
+                        if let Ok(mut opened) = OpenedWasapiStream::open_with_client(
                             client,
                             desired,
                             true,
                             format!("Process Loopback (PID {pid})"),
                         ) {
+                            opened.is_process_loopback = true;
                             return Ok(opened);
                         }
                     }
@@ -1982,6 +2031,99 @@ mod tests {
         assert_eq!(mixed.stream_header().bitrate_bps, 128_000);
         assert_eq!(game.stream_header().bitrate_bps, 128_000);
         assert_eq!(mic.stream_header().bitrate_bps, 96_000);
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_never_stalls_when_mic_drops_or_skips_blocks() -> Result<(), Box<dyn std::error::Error>> {
+        let clock = MonotonicClock::now();
+        let startup = Arc::new(StartupBarrier::new(0, 0));
+        let (pcm_tx, pcm_rx) = bounded::<CapturedBlock>(64);
+        let (cmd_tx, cmd_rx) = bounded::<MixerControl>(16);
+        let (out_tx, out_rx) = bounded::<AudioOutputEvent>(256);
+
+        let mixed_tel = Arc::new(TrackTelemetryShared::new("Mixed"));
+        let game_tel = Arc::new(TrackTelemetryShared::new("Game"));
+        let mic_tel = Arc::new(TrackTelemetryShared::new("Mic"));
+        let sec_tel = Arc::new(TrackTelemetryShared::new("Sec"));
+        let has_sec = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let settings = AudioSettings {
+            game_enabled: true,
+            mic_enabled: true,
+            mic_device: MicDeviceConfig::Default,
+            separate_tracks: true,
+            ..AudioSettings::default()
+        };
+
+        let handle = thread::spawn({
+            let mixed_tel = Arc::clone(&mixed_tel);
+            let game_tel = Arc::clone(&game_tel);
+            let mic_tel = Arc::clone(&mic_tel);
+            let sec_tel = Arc::clone(&sec_tel);
+            let stop_flag = Arc::clone(&stop_flag);
+            move || {
+                run_mixer_loop(
+                    settings,
+                    startup,
+                    clock,
+                    pcm_rx,
+                    cmd_rx,
+                    out_tx,
+                    mixed_tel,
+                    game_tel,
+                    mic_tel,
+                    sec_tel,
+                    has_sec,
+                    stop_flag,
+                );
+            }
+        });
+
+        let tone = [0.25f32; STEREO_BLOCK_SAMPLES];
+        // Mic only sends blocks 0..2 then disappears; Game sends blocks 0..12 (with a gap at 5..7).
+        for idx in [0u64, 1, 2, 3, 4, 8, 9, 10, 11, 12] {
+            let _ = pcm_tx.send(CapturedBlock {
+                slot: SourceSlot::Game,
+                block_idx: idx,
+                samples: tone,
+            });
+            if idx < 2 {
+                let _ = pcm_tx.send(CapturedBlock {
+                    slot: SourceSlot::Mic,
+                    block_idx: idx,
+                    samples: tone,
+                });
+            }
+        }
+
+        // Wait past `MIXER_SLOT_LATE_DEADLINE_US` (120 ms) + 12 * 21.3 ms (~380 ms).
+        thread::sleep(Duration::from_millis(450));
+        stop_flag.store(true, Ordering::Relaxed);
+        let _ = cmd_tx.send(MixerControl::Stop);
+        let _ = handle.join();
+
+        let mut mixed_pkts = 0usize;
+        let mut game_pkts = 0usize;
+        while let Ok(evt) = out_rx.try_recv() {
+            if let AudioOutputEvent::Packet(p) = evt {
+                match p.track {
+                    TrackKind::AudioMixed => mixed_pkts += 1,
+                    TrackKind::AudioGame => game_pkts += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            mixed_pkts >= 8,
+            "mixer must keep emitting AudioMixed even when Mic drops & Game skips slots, got {mixed_pkts}"
+        );
+        assert!(
+            game_pkts >= 8,
+            "mixer must keep emitting AudioGame even when Mic drops, got {game_pkts}"
+        );
         Ok(())
     }
 }

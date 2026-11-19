@@ -114,6 +114,14 @@ pub fn ikoch_temp_dir() -> PathBuf {
     ikoch_cache_root_dir().join("tmp")
 }
 
+/// Resolves the persistent log directory (`%LOCALAPPDATA%\iKoch\logs`).
+#[must_use]
+pub fn ikoch_logs_dir() -> PathBuf {
+    ikoch_cache_root_dir()
+        .parent()
+        .map_or_else(|| PathBuf::from("logs"), |p| p.join("logs"))
+}
+
 fn path_parent_hash8(video_path: &Path) -> String {
     let parent_norm = video_path
         .parent()

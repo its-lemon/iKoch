@@ -22,6 +22,11 @@ pub struct SavedMediaSummary {
     pub bytes_written: u64,
     pub duration_sec: f64,
     pub packet_count: usize,
+    pub video_pkts: usize,
+    pub mixed_pkts: usize,
+    pub game_pkts: usize,
+    pub mic_pkts: usize,
+    pub sec_pkts: usize,
 }
 
 enum DiskTaskCmd {
@@ -154,6 +159,7 @@ impl PacketRouter {
         self.audio_game_header = None;
         self.audio_mic_header = None;
         self.audio_secondary_header = None;
+        self.ring_buffer.lock().clear_cached_audio_headers();
         self.sync_combined_headers();
     }
 
@@ -199,21 +205,55 @@ impl PacketRouter {
             .max()
             .map_or(0.0, |end_us| (end_us.max(0) as f64) / 1_000_000.0);
         let packet_count = packets.len();
+        let mut video_pkts = 0usize;
+        let mut mixed_pkts = 0usize;
+        let mut game_pkts = 0usize;
+        let mut mic_pkts = 0usize;
+        let mut sec_pkts = 0usize;
+        for p in &packets {
+            match p.track {
+                TrackKind::Video => video_pkts += 1,
+                TrackKind::AudioMixed => mixed_pkts += 1,
+                TrackKind::AudioGame => game_pkts += 1,
+                TrackKind::AudioMic => mic_pkts += 1,
+                TrackKind::AudioSecondary => sec_pkts += 1,
+            }
+        }
+
         let bytes_written = write_faststart_mp4(output_path, &headers, &packets)?;
 
         info!(
-            "Saved replay clip '{}' ({:.2}s, {} packets, {} bytes)",
+            "Saved replay clip '{}' ({:.2}s, {} bytes) -> video_pkts={}, mixed_pkts={}, game_pkts={}, mic_pkts={}, sec_pkts={}",
             output_path.display(),
             duration_sec,
-            packet_count,
-            bytes_written
+            bytes_written,
+            video_pkts,
+            mixed_pkts,
+            game_pkts,
+            mic_pkts,
+            sec_pkts
         );
+        if mixed_pkts == 0 {
+            warn!(
+                "Saved replay clip '{}' has NO audio (mixed_pkts=0)! headers_audio_mixed={}, headers_audio_game={}, headers_audio_mic={}, video_pkts={}",
+                output_path.display(),
+                headers.audio_mixed.is_some(),
+                headers.audio_game.is_some(),
+                headers.audio_mic.is_some(),
+                video_pkts
+            );
+        }
 
         Ok(SavedMediaSummary {
             path: output_path.to_path_buf(),
             bytes_written,
             duration_sec,
             packet_count,
+            video_pkts,
+            mixed_pkts,
+            game_pkts,
+            mic_pkts,
+            sec_pkts,
         })
     }
 
@@ -342,6 +382,11 @@ fn run_disk_writer_loop(rx: Receiver<DiskTaskCmd>) {
                             bytes_written: bytes,
                             duration_sec: 0.0,
                             packet_count: 0,
+                            video_pkts: 0,
+                            mixed_pkts: 0,
+                            game_pkts: 0,
+                            mic_pkts: 0,
+                            sec_pkts: 0,
                         })
                     }
                     None => Err(MuxError::InvalidState(

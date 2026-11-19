@@ -32,13 +32,48 @@ use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tracing::{info, warn};
 use tray::TrayController;
 
+struct TeeLogWriter {
+    file: Option<std::sync::Arc<parking_lot::Mutex<std::fs::File>>>,
+}
+
+impl std::io::Write for TeeLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stderr().write(buf);
+        if let Some(f) = &self.file {
+            let _ = f.lock().write_all(buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stderr().flush();
+        if let Some(f) = &self.file {
+            let _ = f.lock().flush();
+        }
+        Ok(())
+    }
+}
+
 /// Starts the Tauri v2 desktop application with background recording daemon and system tray.
 pub fn run() {
+    let logs_dir = core_types::ikoch_logs_dir();
+    let _ = std::fs::create_dir_all(&logs_dir);
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs_dir.join("ikoch.log"))
+        .ok()
+        .map(|f| std::sync::Arc::new(parking_lot::Mutex::new(f)));
+
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_ansi(false)
+        .with_writer(move || TeeLogWriter {
+            file: log_file.clone(),
+        })
         .try_init();
 
     let start_minimized = std::env::args().any(|a| a == "--minimized" || a == "--background");

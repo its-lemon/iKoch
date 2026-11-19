@@ -1,7 +1,9 @@
 //! GOP-aware replay ring buffer keeping compressed video & audio packets bounded by
 //! target duration and RAM cap, evicting strictly along IDR keyframe boundaries.
 
-use core_types::{MediaPacket, MuxError, StreamHeaders, TrackKind};
+use core_types::{
+    AudioStreamHeader, MediaPacket, MuxError, StreamHeaders, TrackKind, VideoStreamHeader,
+};
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
@@ -12,12 +14,21 @@ struct GopSegment {
     bytes: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct CachedAudioHeaders {
+    mixed: Option<AudioStreamHeader>,
+    game: Option<AudioStreamHeader>,
+    mic: Option<AudioStreamHeader>,
+    secondary: Option<AudioStreamHeader>,
+}
+
 /// Compressed circular buffer preserving stream headers (`SPS`/`PPS`/`ASC`) and evicting
 /// expired data strictly one complete GOP at a time.
 pub struct GopRingBuffer {
     target_duration_us: i64,
     max_bytes: usize,
     headers: Option<StreamHeaders>,
+    cached_audio: CachedAudioHeaders,
     gops: VecDeque<GopSegment>,
     total_bytes: usize,
     latest_pts_us: Option<i64>,
@@ -32,6 +43,7 @@ impl GopRingBuffer {
             target_duration_us: i64::from(clamped_secs) * 1_000_000,
             max_bytes: max_bytes.max(4 * 1024 * 1024),
             headers: None,
+            cached_audio: CachedAudioHeaders::default(),
             gops: VecDeque::new(),
             total_bytes: 0,
             latest_pts_us: None,
@@ -47,8 +59,39 @@ impl GopRingBuffer {
     }
 
     /// Stores or updates stream initialization headers (`avcC`/`hvcC` and AAC `AudioSpecificConfig`).
-    pub fn set_headers(&mut self, headers: StreamHeaders) {
+    pub fn set_headers(&mut self, mut headers: StreamHeaders) {
+        if headers.audio_mixed.is_some() {
+            self.cached_audio.mixed = headers.audio_mixed.clone();
+        } else {
+            headers.audio_mixed = self.cached_audio.mixed.clone();
+        }
+        if headers.audio_game.is_some() {
+            self.cached_audio.game = headers.audio_game.clone();
+        } else {
+            headers.audio_game = self.cached_audio.game.clone();
+        }
+        if headers.audio_mic.is_some() {
+            self.cached_audio.mic = headers.audio_mic.clone();
+        } else {
+            headers.audio_mic = self.cached_audio.mic.clone();
+        }
+        if headers.audio_secondary.is_some() {
+            self.cached_audio.secondary = headers.audio_secondary.clone();
+        } else {
+            headers.audio_secondary = self.cached_audio.secondary.clone();
+        }
         self.headers = Some(headers);
+    }
+
+    /// Updates only the video stream header while keeping previously cached audio headers intact.
+    pub fn set_video_header(&mut self, video: VideoStreamHeader) {
+        self.headers = Some(StreamHeaders {
+            video,
+            audio_mixed: self.cached_audio.mixed.clone(),
+            audio_game: self.cached_audio.game.clone(),
+            audio_mic: self.cached_audio.mic.clone(),
+            audio_secondary: self.cached_audio.secondary.clone(),
+        });
     }
 
     /// Returns a reference to the current stream headers, if initialized.
@@ -64,6 +107,11 @@ impl GopRingBuffer {
         self.gops.clear();
         self.total_bytes = 0;
         self.latest_pts_us = None;
+    }
+
+    /// Clears cached audio headers (used before restarting the audio pipeline on bitrate/track changes).
+    pub fn clear_cached_audio_headers(&mut self) {
+        self.cached_audio = CachedAudioHeaders::default();
     }
 
     /// Inserts one compressed packet (`Video`, `AudioGame`, or `AudioMic`).

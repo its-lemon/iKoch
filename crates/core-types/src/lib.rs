@@ -21,7 +21,8 @@ pub use events::{
     RecorderEvent, SoundNotificationKind, ToastKind, TrayIndicatorState,
 };
 pub use metadata::{
-    ikoch_cache_root_dir, ikoch_sidecars_dir, ikoch_temp_dir, ikoch_thumbnails_dir,
+    ikoch_cache_root_dir, ikoch_logs_dir, ikoch_sidecars_dir, ikoch_temp_dir,
+    ikoch_thumbnails_dir,
     AdvancedExportRequest, AspectRatioPreset, AudioTrackMetadata, ClipMetadata,
     DiscordCompressRequest, DiscordPreset, EditorCacheStats, FrameScreenshotRequest,
     GalleryFilter, MarkerSource, RecordingKind, SegmentRange, SessionMarker, TextOverlaySpec,
