@@ -10,7 +10,7 @@
 [![Stack](https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri%20v2%20%2B%20React-orange?style=flat-square)](#build-from-source)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](Cargo.toml)
 
-[English](#-english) • [Русский](#-русский) • [Download Latest Release / Скачать](https://github.com/its-lemon/iKoch/releases/latest)
+[English](#-english) • [Русский](#-русский)
 
 </div>
 
