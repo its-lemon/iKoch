@@ -404,4 +404,38 @@ mod tests {
         assert!(rs.pop_48k_float_frame()?.is_none());
         Ok(())
     }
+
+    #[test]
+    fn downmixes_8ch_7_1_float32_to_stereo_48k_and_recovers_after_silence() -> Result<(), AudioError> {
+        // 8-channel 7.1 float32 @ 48 kHz (typical wireless gaming headset like MCHOSE V9 PRO)
+        let mut rs =
+            Stereo48kResampler::new(48_000, 8, SampleType::Float, 32, 32, 32, 1.0, false)?;
+
+        // 1) Push 1024 frames of silence
+        rs.push_silence_input_frames(1024);
+        let silent_block = rs
+            .pop_48k_float_frame()?
+            .ok_or_else(|| AudioError::ResampleFailed("expected silent 7.1 block".to_string()))?;
+        assert!(silent_block.iter().all(|&s| s == 0.0));
+
+        // 2) Resume real 8-channel 7.1 audio (signal in FL, FR, FC, SL, SR)
+        let mut raw = Vec::with_capacity(1024 * 32);
+        for i in 0..1024 {
+            let tone = 0.25 * (2.0 * std::f32::consts::PI * 440.0 * (i as f32) / 48_000.0).sin();
+            let chs = [tone, tone, tone * 0.5, 0.0, 0.0, 0.0, tone * 0.5, tone * 0.5];
+            for ch in chs {
+                raw.extend_from_slice(&ch.to_le_bytes());
+            }
+        }
+        rs.push_raw_bytes(&raw);
+        let audio_block = rs
+            .pop_48k_float_frame()?
+            .ok_or_else(|| AudioError::ResampleFailed("expected active 7.1 block".to_string()))?;
+        let peak = audio_block.iter().fold(0.0f32, |acc, &v| acc.max(v.abs()));
+        assert!(
+            peak > 0.20,
+            "expected audible 7.1 -> stereo downmix after silence, got peak={peak}"
+        );
+        Ok(())
+    }
 }

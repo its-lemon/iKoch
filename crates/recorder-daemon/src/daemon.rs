@@ -19,10 +19,10 @@ use core_capture::{
 use core_encode::{EncoderOutput, MfHardwareEncoder, MfVideoEncoderConfig};
 use core_mux::PacketRouter;
 use core_types::{
-    ActiveSessionInfo, AppLanguage, AppSettings, AudioTrackMetadata, CacheCleanupMode,
-    CaptureTarget, ClipMetadata, DaemonStateSnapshot, DetectedGameInfo, MarkerSource,
-    MediaPacket, MonotonicClock, MuxError, PipelineComponent, RecorderCommand, RecorderEvent,
-    RecordingKind, SessionMarker, SoundNotificationKind, ToastKind, TrackKind,
+    ActiveSessionInfo, AppLanguage, AppSettings, AudioOutputMode, AudioTrackMetadata,
+    CacheCleanupMode, CaptureTarget, ClipMetadata, DaemonStateSnapshot, DetectedGameInfo,
+    MarkerSource, MediaPacket, MonotonicClock, MuxError, PipelineComponent, RecorderCommand,
+    RecorderEvent, RecordingKind, SessionMarker, SoundNotificationKind, ToastKind, TrackKind,
     TrayIndicatorState, VideoStreamHeader, ENCODED_PACKET_CHANNEL_CAPACITY,
 };
 use crossbeam_channel::{bounded, select, tick, Receiver, Sender};
@@ -695,6 +695,38 @@ impl DaemonRuntime {
 
         match self.router.save_replay_clip(&path) {
             Ok(summary) => {
+                let (game_peak_dbfs, mic_peak_dbfs, output_device_name) =
+                    if let Some(tel) = self.audio.as_ref().map(AudioPipelineHandle::telemetry) {
+                        (tel.game.peak_dbfs, tel.mic.peak_dbfs, tel.game.active_device)
+                    } else {
+                        (-100.0, -100.0, "None".to_string())
+                    };
+                let active_mode = match &self.settings.audio.audio_output_mode {
+                    AudioOutputMode::DefaultDevice => "Default",
+                    AudioOutputMode::SpecificDevice(_) => "Specific",
+                    AudioOutputMode::GameProcessOnly => "GameProcessOnly",
+                };
+                info!(
+                    "Clip audio summary '{}' -> game_pkts={}, mic_pkts={}, game_peak_dbfs={:.1}, mic_peak_dbfs={:.1}, output_device_name='{}', active_mode={}",
+                    summary.path.display(),
+                    summary.game_pkts,
+                    summary.mic_pkts,
+                    game_peak_dbfs,
+                    mic_peak_dbfs,
+                    output_device_name,
+                    active_mode
+                );
+                if summary.mic_pkts > 0 && game_peak_dbfs < -95.0 {
+                    warn!(
+                        "Clip '{}' has silent Game Audio (game_peak_dbfs={:.1} < -95.0) while mic_pkts={} (output_device_name='{}', active_mode={})",
+                        summary.path.display(),
+                        game_peak_dbfs,
+                        summary.mic_pkts,
+                        output_device_name,
+                        active_mode
+                    );
+                }
+
                 let now = Utc::now();
                 let clip_start = now
                     - ChronoDuration::milliseconds((summary.duration_sec * 1000.0).round() as i64);

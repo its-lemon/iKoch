@@ -50,8 +50,13 @@ const BLOCK_DURATION_US: u128 = 21_333;
 const MIXER_SLOT_LATE_DEADLINE_US: i64 = 120_000;
 /// Backoff between WASAPI reopen attempts on disconnect / unavailable device.
 const WASAPI_RECONNECT_BACKOFF: Duration = Duration::from_millis(750);
-/// If `GameProcessOnly` produces 0 non-zero frames in 3 seconds, fall back to `DefaultDevice`.
+/// If `GameProcessOnly` produces 0 frames above `PROCESS_LOOPBACK_ACTIVE_PEAK_THRESHOLD` in 3 seconds,
+/// fall back to `DefaultDevice`.
 const GAME_PROCESS_SILENCE_FALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
+/// Minimum linear peak amplitude (`~ -80 dBFS`) treated as real non-silent audio in `GameProcessOnly`.
+const PROCESS_LOOPBACK_ACTIVE_PEAK_THRESHOLD: f32 = 0.0001;
+/// Jitter buffer depth (blocks of 21.33 ms): ~85 ms tolerance so late `Game` blocks align cleanly.
+const MIXER_JITTER_BUFFER_BLOCKS: usize = 4;
 
 /// RAII guard configuring MTA COM, 1 ms OS timer resolution, and Windows MMCSS `"Pro Audio"` priority.
 struct AudioThreadGuard {
@@ -1058,9 +1063,18 @@ fn run_source_capture_loop(
                                     }
                                 }
                                 if frames_read > 0 {
+                                    let was_in_silence = silent_since.is_some();
                                     last_real_packet_at = Instant::now();
                                     silent_since = None;
                                     silent_blocks_emitted = 0;
+                                    if was_in_silence && s.resampler.queued_input_frames() < AAC_FRAME_SAMPLES {
+                                        let target_wall_blocks =
+                                            elapsed_48k_frames(base_pts_us, clock.now_us())
+                                                / (AAC_FRAME_SAMPLES as u64);
+                                        if target_wall_blocks > block_idx.saturating_add(2) {
+                                            block_idx = target_wall_blocks.saturating_sub(1);
+                                        }
+                                    }
                                     let read_bytes = frames_read as usize * s.bytes_per_frame;
                                     telemetry.add_real_frames(u64::from(frames_read));
                                     if buf_info.flags.silent {
@@ -1094,7 +1108,9 @@ fn run_source_capture_loop(
                 }
                 if s.is_process_loopback
                     && !process_loopback_nonzero_seen
-                    && f32_block.iter().any(|&v| v.abs() > 1e-6)
+                    && f32_block
+                        .iter()
+                        .any(|&v| v.abs() > PROCESS_LOOPBACK_ACTIVE_PEAK_THRESHOLD)
                 {
                     process_loopback_nonzero_seen = true;
                 }
@@ -1430,9 +1446,13 @@ fn run_mixer_loop(
             let sec_ready = !cfg.secondary_enabled || sec_queue.contains_key(&next_mix_idx);
             let all_ready = game_ready && mic_ready && sec_ready;
 
-            // Never stall the mixer past `MIXER_SLOT_LATE_DEADLINE_US`: even if a source
-            // disconnected, hung, or skipped `block_idx` on reopen, substitute silence and advance.
-            if !all_ready && !past_deadline {
+            // Hold up to `MIXER_SLOT_LATE_DEADLINE_US` (120 ms, ~5 blocks) / `MIXER_JITTER_BUFFER_BLOCKS`
+            // so a slightly jittery Game stream (e.g. 8ch 7.1 wireless headset) aligns with Mic
+            // instead of emitting premature silence; past deadline, substitute silence and advance.
+            let any_queue_overflowing = game_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
+                || mic_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
+                || sec_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2;
+            if !all_ready && !past_deadline && !any_queue_overflowing {
                 break;
             }
 
@@ -1554,15 +1574,24 @@ fn insert_staged_block(
     mic_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
     sec_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
 ) {
-    if blk.block_idx < min_idx {
-        return;
-    }
     let map = match blk.slot {
         SourceSlot::Game => game_queue,
         SourceSlot::Mic => mic_queue,
         SourceSlot::Secondary => sec_queue,
     };
-    map.insert(blk.block_idx, blk.samples);
+    let target_idx = if blk.block_idx < min_idx {
+        // Never discard slightly-late blocks (e.g. after 110ms silence pause or 10-40ms USB/7.1 jitter):
+        // snap forward into the next unoccupied mixer slot >= `min_idx`.
+        let Some(free_idx) = (min_idx..min_idx + (MAX_STAGED_BLOCKS_PER_SOURCE as u64))
+            .find(|idx| !map.contains_key(idx))
+        else {
+            return;
+        };
+        free_idx
+    } else {
+        blk.block_idx
+    };
+    map.insert(target_idx, blk.samples);
     while map.len() > MAX_STAGED_BLOCKS_PER_SOURCE {
         let Some(&oldest_key) = map.keys().next() else {
             break;
@@ -2124,6 +2153,111 @@ mod tests {
             game_pkts >= 8,
             "mixer must keep emitting AudioGame even when Mic drops, got {game_pkts}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn mixer_aligns_late_game_blocks_without_dropping_after_jitter_or_silence(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let clock = MonotonicClock::now();
+        let startup = Arc::new(StartupBarrier::new(0, 0));
+        let (pcm_tx, pcm_rx) = bounded::<CapturedBlock>(64);
+        let (cmd_tx, cmd_rx) = bounded::<MixerControl>(16);
+        let (out_tx, out_rx) = bounded::<AudioOutputEvent>(256);
+
+        let mixed_tel = Arc::new(TrackTelemetryShared::new("Mixed"));
+        let game_tel = Arc::new(TrackTelemetryShared::new("Game"));
+        let mic_tel = Arc::new(TrackTelemetryShared::new("Mic"));
+        let sec_tel = Arc::new(TrackTelemetryShared::new("Sec"));
+        let has_sec = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let settings = AudioSettings {
+            game_enabled: true,
+            mic_enabled: true,
+            mic_device: MicDeviceConfig::Default,
+            separate_tracks: true,
+            ..AudioSettings::default()
+        };
+
+        let handle = thread::spawn({
+            let mixed_tel = Arc::clone(&mixed_tel);
+            let game_tel = Arc::clone(&game_tel);
+            let mic_tel = Arc::clone(&mic_tel);
+            let sec_tel = Arc::clone(&sec_tel);
+            let stop_flag = Arc::clone(&stop_flag);
+            move || {
+                run_mixer_loop(
+                    settings,
+                    startup,
+                    clock,
+                    pcm_rx,
+                    cmd_rx,
+                    out_tx,
+                    mixed_tel,
+                    game_tel,
+                    mic_tel,
+                    sec_tel,
+                    has_sec,
+                    stop_flag,
+                );
+            }
+        });
+
+        let mic_tone = [0.15f32; STEREO_BLOCK_SAMPLES];
+        let game_tone = [0.35f32; STEREO_BLOCK_SAMPLES];
+
+        // 1) Mic sends blocks 0..8 immediately, advancing `next_mix_idx` past 0..5 after deadline.
+        for idx in 0..8u64 {
+            let _ = pcm_tx.send(CapturedBlock {
+                slot: SourceSlot::Mic,
+                block_idx: idx,
+                samples: mic_tone,
+            });
+        }
+        thread::sleep(Duration::from_millis(260));
+
+        // 2) Game arrives late with `block_idx` starting at 0 (behind `next_mix_idx`) + Mic continues 8..14.
+        for idx in 8..14u64 {
+            let _ = pcm_tx.send(CapturedBlock {
+                slot: SourceSlot::Mic,
+                block_idx: idx,
+                samples: mic_tone,
+            });
+        }
+        for late_idx in 0..6u64 {
+            let _ = pcm_tx.send(CapturedBlock {
+                slot: SourceSlot::Game,
+                block_idx: late_idx,
+                samples: game_tone,
+            });
+        }
+
+        thread::sleep(Duration::from_millis(250));
+        stop_flag.store(true, Ordering::Relaxed);
+        let _ = cmd_tx.send(MixerControl::Stop);
+        let _ = handle.join();
+
+        let game_snap = game_tel.snapshot();
+        assert!(
+            game_snap.peak_dbfs > -20.0,
+            "late Game blocks must NOT be dropped; expected audible peak_dbfs > -20, got {:.1}",
+            game_snap.peak_dbfs
+        );
+
+        let mut game_pkts = 0usize;
+        let mut mixed_pkts = 0usize;
+        while let Ok(evt) = out_rx.try_recv() {
+            if let AudioOutputEvent::Packet(p) = evt {
+                match p.track {
+                    TrackKind::AudioGame => game_pkts += 1,
+                    TrackKind::AudioMixed => mixed_pkts += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(game_pkts >= 6, "expected >= 6 Game AAC packets, got {game_pkts}");
+        assert!(mixed_pkts >= 10, "expected >= 10 Mixed AAC packets, got {mixed_pkts}");
         Ok(())
     }
 }
