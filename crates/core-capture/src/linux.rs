@@ -467,7 +467,7 @@ fn run_linux_capture_loop(
         let mut restart_needed = false;
 
         while !stop_flag.load(Ordering::Relaxed) && !restart_needed {
-            while let Ok(cmd) = cmd_rx.try_recv() {
+            if let Ok(cmd) = cmd_rx.try_recv() {
                 match cmd {
                     CaptureControlCommand::Stop => {
                         let _ = pipeline.set_state(gst::State::Null);
@@ -477,13 +477,11 @@ fn run_linux_capture_loop(
                         current_target = new_t;
                         epoch = epoch.saturating_add(1);
                         restart_needed = true;
-                        break;
                     }
                     CaptureControlCommand::SetResolution(new_res) => {
                         config.resolution = new_res;
                         epoch = epoch.saturating_add(1);
                         restart_needed = true;
-                        break;
                     }
                 }
             }
