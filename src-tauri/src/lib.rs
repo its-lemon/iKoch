@@ -83,6 +83,7 @@ pub fn run() {
             open_or_focus_main_window(app, None);
         }))
         .invoke_handler(tauri::generate_handler![
+            commands::get_platform_info,
             commands::get_daemon_state,
             commands::get_settings,
             commands::save_settings,

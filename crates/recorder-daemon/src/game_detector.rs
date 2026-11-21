@@ -78,6 +78,14 @@ pub enum GameDetectionTransition {
     Lost(String),
 }
 
+fn normalize_proc_stem(raw: &str) -> String {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    trimmed
+        .strip_suffix(".exe")
+        .unwrap_or(&trimmed)
+        .to_string()
+}
+
 /// Classifies processes against built-in, custom whitelist, and blacklist rules.
 #[must_use]
 pub fn classify_executable(
@@ -89,11 +97,12 @@ pub fn classify_executable(
     if lower.is_empty() {
         return None;
     }
+    let stem = normalize_proc_stem(&lower);
 
     if cfg
         .blacklist_exes
         .iter()
-        .any(|b| b.trim().eq_ignore_ascii_case(&lower))
+        .any(|b| normalize_proc_stem(b) == stem)
     {
         return None;
     }
@@ -101,12 +110,16 @@ pub fn classify_executable(
     if cfg
         .custom_whitelist_exes
         .iter()
-        .any(|w| w.trim().eq_ignore_ascii_case(&lower))
+        .any(|w| normalize_proc_stem(w) == stem)
     {
         return Some(pretty_game_name(&lower));
     }
 
-    if cfg.use_builtin_game_list && BUILTIN_GAME_EXES.contains(&lower.as_str()) {
+    if cfg.use_builtin_game_list
+        && BUILTIN_GAME_EXES
+            .iter()
+            .any(|b| normalize_proc_stem(b) == stem)
+    {
         return Some(pretty_game_name(&lower));
     }
 
@@ -125,37 +138,38 @@ fn pretty_game_name(exe_lower: &str) -> String {
 }
 
 fn lookup_builtin_game_title(exe_lower: &str) -> Option<&'static str> {
-    match exe_lower {
-        "cs2.exe" => Some("Counter-Strike 2"),
-        "csgo.exe" => Some("Counter-Strike Global Offensive"),
-        "valorant-win64-shipping.exe" => Some("VALORANT"),
-        "dota2.exe" => Some("Dota 2"),
-        "eldenring.exe" => Some("ELDEN RING"),
-        "cyberpunk2077.exe" => Some("Cyberpunk 2077"),
-        "fortniteclient-win64-shipping.exe" => Some("Fortnite"),
-        "r5apex.exe" => Some("Apex Legends"),
-        "overwatch.exe" => Some("Overwatch 2"),
-        "gta5.exe" => Some("Grand Theft Auto V"),
-        "rdr2.exe" => Some("Red Dead Redemption 2"),
-        "minecraft.exe" | "javaw.exe" => Some("Minecraft"),
-        "bg3.exe" | "bg3_dx11.exe" => Some("Baldur's Gate 3"),
-        "helldivers2.exe" => Some("HELLDIVERS 2"),
-        "rustclient.exe" => Some("Rust"),
-        "tslgame.exe" => Some("PUBG BATTLEGROUNDS"),
-        "league of legends.exe" => Some("League of Legends"),
-        "wow.exe" => Some("World of Warcraft"),
-        "escapefromtarkov.exe" => Some("Escape from Tarkov"),
-        "stalker2-win64-shipping.exe" => Some("S.T.A.L.K.E.R. 2"),
-        "witcher3.exe" => Some("The Witcher 3"),
-        "hogwartslegacy.exe" => Some("Hogwarts Legacy"),
-        "terraria.exe" => Some("Terraria"),
-        "hades.exe" => Some("Hades"),
-        "hades2.exe" => Some("Hades II"),
-        "destiny2.exe" => Some("Destiny 2"),
-        "rocketleague.exe" => Some("Rocket League"),
-        "warframe.x64.exe" => Some("Warframe"),
-        "pathofexile_x64steam.exe" => Some("Path of Exile"),
-        "deadlock.exe" => Some("Deadlock"),
+    let stem = normalize_proc_stem(exe_lower);
+    match stem.as_str() {
+        "cs2" => Some("Counter-Strike 2"),
+        "csgo" => Some("Counter-Strike Global Offensive"),
+        "valorant-win64-shipping" => Some("VALORANT"),
+        "dota2" => Some("Dota 2"),
+        "eldenring" => Some("ELDEN RING"),
+        "cyberpunk2077" => Some("Cyberpunk 2077"),
+        "fortniteclient-win64-shipping" => Some("Fortnite"),
+        "r5apex" => Some("Apex Legends"),
+        "overwatch" => Some("Overwatch 2"),
+        "gta5" => Some("Grand Theft Auto V"),
+        "rdr2" => Some("Red Dead Redemption 2"),
+        "minecraft" | "javaw" => Some("Minecraft"),
+        "bg3" | "bg3_dx11" => Some("Baldur's Gate 3"),
+        "helldivers2" => Some("HELLDIVERS 2"),
+        "rustclient" => Some("Rust"),
+        "tslgame" => Some("PUBG BATTLEGROUNDS"),
+        "league of legends" => Some("League of Legends"),
+        "wow" => Some("World of Warcraft"),
+        "escapefromtarkov" => Some("Escape from Tarkov"),
+        "stalker2-win64-shipping" => Some("S.T.A.L.K.E.R. 2"),
+        "witcher3" => Some("The Witcher 3"),
+        "hogwartslegacy" => Some("Hogwarts Legacy"),
+        "terraria" => Some("Terraria"),
+        "hades" => Some("Hades"),
+        "hades2" => Some("Hades II"),
+        "destiny2" => Some("Destiny 2"),
+        "rocketleague" => Some("Rocket League"),
+        "warframe.x64" => Some("Warframe"),
+        "pathofexile_x64steam" => Some("Path of Exile"),
+        "deadlock" => Some("Deadlock"),
         _ => None,
     }
 }

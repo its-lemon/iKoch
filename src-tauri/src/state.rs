@@ -61,6 +61,12 @@ impl AppState {
             .map_or_else(AppSettings::default, RecorderDaemon::settings)
     }
 
+    /// Returns the resolved path to `settings.json`.
+    #[must_use]
+    pub fn settings_path(&self) -> &Path {
+        &self.settings_path
+    }
+
     /// Persists `settings` atomically to `%APPDATA%/iKoch/settings.json`.
     pub fn persist_settings(&self, settings: &AppSettings) -> Result<(), String> {
         if let Some(parent) = self.settings_path.parent() {

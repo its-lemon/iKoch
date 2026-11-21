@@ -11,6 +11,7 @@ import type {
   FrameScreenshotRequest,
   GalleryFilter,
   MonitorInfo,
+  PlatformInfo,
   PreparedEditorMedia,
   RecorderCommand,
   SoundNotificationKind,
@@ -23,6 +24,8 @@ export function toAssetUrl(filePath: string): string {
 }
 
 export const api = {
+  getPlatformInfo: () => invoke<PlatformInfo>("get_platform_info"),
+
   getDaemonState: () => invoke<DaemonStateSnapshot>("get_daemon_state"),
 
   getSettings: () => invoke<AppSettings>("get_settings"),

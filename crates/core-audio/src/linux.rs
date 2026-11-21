@@ -258,12 +258,34 @@ fn enumerate_pulse_devices(want_monitors: bool) -> Vec<AudioDeviceInfo> {
         }
     }
 
+    let default_sink: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let default_source: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let info_done = Rc::new(RefCell::new(false));
+    let introspect = ctx.introspect();
+
+    let ds_c = Rc::clone(&default_sink);
+    let dsrc_c = Rc::clone(&default_source);
+    let id_c = Rc::clone(&info_done);
+    let _info_op = introspect.get_server_info(move |srv| {
+        *ds_c.borrow_mut() = srv.default_sink_name.as_ref().map(|s| s.to_string());
+        *dsrc_c.borrow_mut() = srv.default_source_name.as_ref().map(|s| s.to_string());
+        *id_c.borrow_mut() = true;
+    });
+    let info_wait = Instant::now();
+    while !*info_done.borrow() && info_wait.elapsed() < Duration::from_secs(1) {
+        if let pulse::mainloop::standard::IterateResult::Err(_) = mainloop.iterate(false) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+
     let results: Rc<RefCell<Vec<AudioDeviceInfo>>> = Rc::new(RefCell::new(Vec::new()));
     let done = Rc::new(RefCell::new(false));
-    let introspect = ctx.introspect();
 
     let res_c = Rc::clone(&results);
     let done_c = Rc::clone(&done);
+    let ds_match = default_sink.borrow().clone();
+    let dsrc_match = default_source.borrow().clone();
     let op = introspect.get_source_info_list(move |list_res| match list_res {
         pulse::callbacks::ListResult::Item(info) => {
             let is_monitor = info.monitor_of_sink.is_some();
@@ -279,11 +301,22 @@ fn enumerate_pulse_devices(want_monitors: bool) -> Vec<AudioDeviceInfo> {
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| id.clone());
                 if !id.is_empty() {
-                    let is_first = res_c.borrow().is_empty();
+                    let is_def = if want_monitors {
+                        let monitor_sink = info
+                            .monitor_of_sink_name
+                            .as_ref()
+                            .map(|s| s.to_string());
+                        ds_match.as_ref().is_some_and(|ds| {
+                            monitor_sink.as_deref() == Some(ds.as_str())
+                                || id == format!("{ds}.monitor")
+                        })
+                    } else {
+                        dsrc_match.as_deref() == Some(id.as_str())
+                    };
                     res_c.borrow_mut().push(AudioDeviceInfo {
                         id,
                         name,
-                        is_default: is_first,
+                        is_default: is_def,
                     });
                 }
             }
@@ -302,7 +335,16 @@ fn enumerate_pulse_devices(want_monitors: bool) -> Vec<AudioDeviceInfo> {
     }
     let _ = op;
     ctx.disconnect();
-    results.take()
+    let mut out = results.take();
+    if let Some(def_idx) = out.iter().position(|d| d.is_default) {
+        if def_idx > 0 {
+            let def_item = out.remove(def_idx);
+            out.insert(0, def_item);
+        }
+    } else if let Some(first) = out.first_mut() {
+        first.is_default = true;
+    }
+    out
 }
 
 /// GStreamer-backed AAC-LC encoder (`48 kHz Stereo S16LE -> raw AAC-LC`).
@@ -571,30 +613,53 @@ impl Drop for AudioPipelineHandle {
 
 fn spawn_pulse_pcm_reader(
     device_name: Option<String>,
+    role: &'static str,
     stop_flag: Arc<AtomicBool>,
 ) -> Option<(Receiver<[f32; STEREO_BLOCK_SAMPLES]>, JoinHandle<()>)> {
     let dev_arg = device_name
+        .as_deref()
         .map(|d| format!("device=\"{d}\""))
         .unwrap_or_default();
     let pipeline_str = format!(
         "pulsesrc {dev_arg} ! audioconvert ! audioresample ! audio/x-raw,format=F32LE,layout=interleaved,rate={TARGET_SAMPLE_RATE_HZ},channels={TARGET_CHANNELS} ! appsink name=sink emit-signals=false sync=false max-buffers=16 drop=true"
     );
-    let el = gst::parse::launch(&pipeline_str).ok()?;
+    let el = match gst::parse::launch(&pipeline_str) {
+        Ok(e) => e,
+        Err(err) => {
+            warn!("Linux audio [{role}] GStreamer parse failed ({pipeline_str}): {err}");
+            return None;
+        }
+    };
     let pipeline = el.downcast::<gst::Pipeline>().ok()?;
     let sink = pipeline
         .by_name("sink")
         .and_then(|e| e.downcast::<gst_app::AppSink>().ok())?;
-    if pipeline.set_state(gst::State::Playing).is_err() {
+    if let Err(err) = pipeline.set_state(gst::State::Playing) {
+        warn!("Linux audio [{role}] failed to start pulsesrc ({pipeline_str}): {err}");
         let _ = pipeline.set_state(gst::State::Null);
         return None;
     }
 
+    info!("Linux audio [{role}] capturing via pulsesrc ({})", device_name.as_deref().unwrap_or("default"));
     let (tx, rx) = bounded::<[f32; STEREO_BLOCK_SAMPLES]>(32);
     let handle = thread::Builder::new()
-        .name("ikoch-linux-pulse".to_string())
+        .name(format!("ikoch-linux-pulse-{role}"))
         .spawn(move || {
             let mut accum: Vec<f32> = Vec::with_capacity(STEREO_BLOCK_SAMPLES * 2);
             while !stop_flag.load(Ordering::Relaxed) {
+                if let Some(bus) = pipeline.bus() {
+                    while let Some(msg) = bus.pop() {
+                        match msg.view() {
+                            gst::MessageView::Error(e) => {
+                                warn!("Linux audio [{role}] GStreamer error: {} ({:?})", e.error(), e.debug());
+                            }
+                            gst::MessageView::Warning(w) => {
+                                warn!("Linux audio [{role}] GStreamer warning: {}", w.error());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 if let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(20)) {
                     if let Some(buf) = sample.buffer() {
                         if let Ok(map) = buf.map_readable() {
@@ -669,10 +734,10 @@ pub fn start_audio_pipeline(
             };
 
             let game_dev = match &settings.audio_output_mode {
-                AudioOutputMode::SpecificDevice(id) => Some(id.clone()),
+                AudioOutputMode::SpecificDevice(id) if id != "default" => Some(id.clone()),
                 _ => enumerate_render_devices()
                     .ok()
-                    .and_then(|v| v.into_iter().next().map(|d| d.id)),
+                    .and_then(|v| v.into_iter().find(|d| d.id != "default").map(|d| d.id)),
             };
             let mic_dev = match &settings.mic_device {
                 MicDeviceConfig::None => None,
@@ -682,16 +747,23 @@ pub fn start_audio_pipeline(
 
             let mut sub_threads = Vec::new();
             let game_rx = if settings.game_enabled {
-                spawn_pulse_pcm_reader(game_dev, Arc::clone(&stop_c)).map(|(rx, h)| {
-                    sub_threads.push(h);
-                    rx
-                })
+                if let Some(monitor_id) = game_dev {
+                    spawn_pulse_pcm_reader(Some(monitor_id), "game", Arc::clone(&stop_c)).map(
+                        |(rx, h)| {
+                            sub_threads.push(h);
+                            rx
+                        },
+                    )
+                } else {
+                    warn!("Linux audio [game]: no PulseAudio/PipeWire .monitor sink found; game audio will be silent");
+                    None
+                }
             } else {
                 None
             };
             let mic_rx = if settings.mic_enabled && settings.mic_device != MicDeviceConfig::None {
                 let target = mic_dev.filter(|d| d != "default");
-                spawn_pulse_pcm_reader(target, Arc::clone(&stop_c)).map(|(rx, h)| {
+                spawn_pulse_pcm_reader(target, "mic", Arc::clone(&stop_c)).map(|(rx, h)| {
                     sub_threads.push(h);
                     rx
                 })

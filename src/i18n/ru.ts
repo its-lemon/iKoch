@@ -259,12 +259,15 @@ export const ru = {
     title: "Настройки iKoch",
     subtitle:
       "Параметры сохраняются в %APPDATA%\\iKoch\\settings.json и применяются без перезапуска",
+    subtitleWithPath: (path: string) =>
+      `Параметры сохраняются в ${path} и применяются без перезапуска`,
     unsaved: "Есть несохранённые изменения",
     applied: "Настройки применены",
     saving: "Сохранение...",
     saveBtn: "Сохранить и применить",
     savedTitle: "Настройки сохранены и применены",
     savedMsg: "Изменения записаны в %APPDATA%\\iKoch\\settings.json",
+    savedMsgWithPath: (path: string) => `Изменения записаны в ${path}`,
     saveErrorTitle: "Ошибка сохранения настроек",
 
     // Tabs in exact required order: Capture -> Audio -> Notifications -> Appearance -> Hotkeys & Cache
@@ -318,8 +321,10 @@ export const ru = {
     builtinGameList: "Встроенная база игр и движков",
     altTabDelay: "Задержка перед паузой при Alt+Tab",
     whitelistTitle: "Whitelist (.exe)",
+    whitelistTitleLinux: "Whitelist (процессы)",
     whitelistHint: "Всегда считать эти процессы игрой",
     blacklistTitle: "Blacklist (.exe)",
+    blacklistTitleLinux: "Blacklist (процессы)",
     blacklistHint: "Никогда не перехватывать автоматически",
     exeAddBtn: "Добавить",
     exeListEmpty: "Список пуст",
@@ -402,8 +407,11 @@ export const ru = {
     colorTextPrimary: "Цвет текста",
     systemTitle: "Система и автозапуск",
     autostartLabel: "Запускать вместе с Windows (свёрнутым в трей)",
+    autostartLabelLinux: "Запускать вместе с системой (свёрнутым в трей)",
     autostartHint:
       "Добавляет iKoch в автозагрузку Windows (HKCU\\...\\Run) с флагом --minimized",
+    autostartHintWithTarget: (target: string) =>
+      `Добавляет iKoch в автозагрузку (${target}) с флагом --minimized`,
 
     // Hotkeys & Cache tab
     hotkeysTitle: "Глобальные горячие клавиши",

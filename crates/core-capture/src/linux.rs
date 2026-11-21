@@ -14,13 +14,14 @@ use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use std::fs;
 use std::os::fd::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use x11rb::connection::Connection;
+use x11rb::protocol::randr;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
 
 /// Shared Linux capture context (analogous to `D3d11SharedContext` on Windows).
@@ -121,25 +122,18 @@ impl Drop for CaptureSessionHandle {
     }
 }
 
-/// Enumerates monitors via X11/XWayland, falling back to a default Wayland portal monitor.
+/// Enumerates all connected monitors via XRandR (X11 / XWayland), falling back to
+/// Linux DRM sysfs (`/sys/class/drm/card*-*/`) on pure Wayland, and finally a portal placeholder.
 pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>, CaptureError> {
-    if let Ok((conn, screen_num)) = x11rb::connect(None) {
-        let setup = conn.setup();
-        if let Some(screen) = setup.roots.get(screen_num) {
-            return Ok(vec![MonitorInfo {
-                monitor_id: "DISPLAY-0".to_string(),
-                name: format!(
-                    "Primary Display ({}x{})",
-                    screen.width_in_pixels, screen.height_in_pixels
-                ),
-                hmonitor: 0,
-                width: u32::from(screen.width_in_pixels),
-                height: u32::from(screen.height_in_pixels),
-                x: 0,
-                y: 0,
-                is_primary: true,
-            }]);
+    if let Some(xrandr_monitors) = enumerate_monitors_xrandr() {
+        if !xrandr_monitors.is_empty() {
+            return Ok(xrandr_monitors);
         }
+    }
+
+    let drm_monitors = enumerate_monitors_drm_sysfs();
+    if !drm_monitors.is_empty() {
+        return Ok(drm_monitors);
     }
 
     Ok(vec![MonitorInfo {
@@ -152,6 +146,144 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>, CaptureError> {
         y: 0,
         is_primary: true,
     }])
+}
+
+fn enumerate_monitors_xrandr() -> Option<Vec<MonitorInfo>> {
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let screen = conn.setup().roots.get(screen_num)?;
+    let res = randr::get_screen_resources_current(&conn, screen.root)
+        .ok()?
+        .reply()
+        .ok()?;
+    let primary_output = randr::get_output_primary(&conn, screen.root)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| r.output)
+        .unwrap_or(0);
+
+    let mut out = Vec::new();
+    for &output in &res.outputs {
+        let Ok(info_cookie) = randr::get_output_info(&conn, output, res.config_timestamp) else {
+            continue;
+        };
+        let Ok(info) = info_cookie.reply() else {
+            continue;
+        };
+        if info.connection != randr::Connection::CONNECTED || info.crtc == 0 {
+            continue;
+        }
+        let Ok(crtc_cookie) = randr::get_crtc_info(&conn, info.crtc, res.config_timestamp) else {
+            continue;
+        };
+        let Ok(crtc) = crtc_cookie.reply() else {
+            continue;
+        };
+        if crtc.width == 0 || crtc.height == 0 {
+            continue;
+        }
+        let connector = String::from_utf8_lossy(&info.name).trim().to_string();
+        let label = if connector.is_empty() {
+            format!("Monitor {}", out.len() + 1)
+        } else {
+            connector.clone()
+        };
+        let is_primary = output == primary_output || (primary_output == 0 && out.is_empty());
+        out.push(MonitorInfo {
+            monitor_id: label.clone(),
+            name: format!("{label} ({}x{})", crtc.width, crtc.height),
+            hmonitor: out.len() as isize,
+            width: u32::from(crtc.width),
+            height: u32::from(crtc.height),
+            x: i32::from(crtc.x),
+            y: i32::from(crtc.y),
+            is_primary,
+        });
+    }
+
+    if out.is_empty() {
+        out.push(MonitorInfo {
+            monitor_id: "DISPLAY-0".to_string(),
+            name: format!(
+                "Primary Display ({}x{})",
+                screen.width_in_pixels, screen.height_in_pixels
+            ),
+            hmonitor: 0,
+            width: u32::from(screen.width_in_pixels),
+            height: u32::from(screen.height_in_pixels),
+            x: 0,
+            y: 0,
+            is_primary: true,
+        });
+    } else if !out.iter().any(|m| m.is_primary) {
+        if let Some(first) = out.first_mut() {
+            first.is_primary = true;
+        }
+    }
+
+    Some(out)
+}
+
+fn enumerate_monitors_drm_sysfs() -> Vec<MonitorInfo> {
+    let Ok(entries) = fs::read_dir("/sys/class/drm") else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|name| name.starts_with("card") && name.contains('-'))
+        })
+        .collect();
+    paths.sort();
+
+    let mut out = Vec::new();
+    let mut x_offset = 0i32;
+    for path in paths {
+        let Ok(status) = fs::read_to_string(path.join("status")) else {
+            continue;
+        };
+        if status.trim() != "connected" {
+            continue;
+        }
+        let (width, height) = fs::read_to_string(path.join("modes"))
+            .ok()
+            .and_then(|modes| {
+                modes.lines().find_map(|line| {
+                    let (w_str, h_str) = line.trim().split_once('x')?;
+                    let w = w_str.parse::<u32>().ok()?;
+                    let h = h_str
+                        .trim_end_matches(|c: char| !c.is_ascii_digit())
+                        .parse::<u32>()
+                        .ok()?;
+                    (w > 0 && h > 0).then_some((w, h))
+                })
+            })
+            .unwrap_or((1920, 1080));
+
+        let raw_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Display");
+        let connector = raw_name
+            .split_once('-')
+            .map_or(raw_name, |(_, rest)| rest)
+            .to_string();
+
+        out.push(MonitorInfo {
+            monitor_id: connector.clone(),
+            name: format!("{connector} ({width}x{height})"),
+            hmonitor: out.len() as isize,
+            width,
+            height,
+            x: x_offset,
+            y: 0,
+            is_primary: out.is_empty(),
+        });
+        x_offset = x_offset.saturating_add(width as i32);
+    }
+    out
 }
 
 /// Enumerates visible top-level X11/XWayland windows with PID and process name.
@@ -309,9 +441,52 @@ struct PortalPipeWireStream {
     height: u32,
 }
 
+fn restore_token_path() -> PathBuf {
+    core_types::ikoch_logs_dir()
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+        .join("screencast_restore_token")
+}
+
+fn load_restore_token() -> Option<String> {
+    fs::read_to_string(restore_token_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn save_restore_token(token: &str) {
+    let path = restore_token_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, token);
+}
+
+fn clear_restore_token() {
+    let _ = fs::remove_file(restore_token_path());
+}
+
 fn open_portal_screencast(
     target: &CaptureTarget,
     capture_cursor: bool,
+) -> Result<PortalPipeWireStream, CaptureError> {
+    let cached = load_restore_token();
+    match open_portal_screencast_once(target, capture_cursor, cached.as_deref()) {
+        Ok(stream) => Ok(stream),
+        Err(err) if cached.is_some() => {
+            warn!("Cached Wayland ScreenCast restore_token failed ({err}); clearing token and retrying");
+            clear_restore_token();
+            open_portal_screencast_once(target, capture_cursor, None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn open_portal_screencast_once(
+    target: &CaptureTarget,
+    capture_cursor: bool,
+    restore_token: Option<&str>,
 ) -> Result<PortalPipeWireStream, CaptureError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -345,8 +520,8 @@ fn open_portal_screencast(
                 cursor_mode,
                 source_types,
                 false,
-                None,
-                PersistMode::DoNot,
+                restore_token,
+                PersistMode::ExplicitlyRevoked,
             )
             .await
             .map_err(|e| CaptureError::InitFailed(format!("select_sources failed: {e}")))?;
@@ -357,6 +532,10 @@ fn open_portal_screencast(
             .map_err(|e| CaptureError::InitFailed(format!("screencast start failed: {e}")))?
             .response()
             .map_err(|e| CaptureError::InitFailed(format!("screencast response failed: {e}")))?;
+
+        if let Some(new_token) = response.restore_token() {
+            save_restore_token(new_token);
+        }
 
         let stream = response
             .streams()
@@ -380,6 +559,40 @@ fn open_portal_screencast(
             height,
         })
     })
+}
+
+fn drain_gst_bus_errors(pipeline: &gst::Pipeline) -> bool {
+    let Some(bus) = pipeline.bus() else {
+        return false;
+    };
+    let mut fatal = false;
+    while let Some(msg) = bus.pop() {
+        match msg.view() {
+            gst::MessageView::Error(err) => {
+                error!(
+                    "GStreamer capture error from {:?}: {} ({:?})",
+                    err.src().map(|s| s.path_string()),
+                    err.error(),
+                    err.debug()
+                );
+                fatal = true;
+            }
+            gst::MessageView::Warning(w) => {
+                warn!(
+                    "GStreamer capture warning from {:?}: {} ({:?})",
+                    w.src().map(|s| s.path_string()),
+                    w.error(),
+                    w.debug()
+                );
+            }
+            gst::MessageView::Eos(_) => {
+                warn!("GStreamer capture stream ended (EOS)");
+                fatal = true;
+            }
+            _ => {}
+        }
+    }
+    fatal
 }
 
 fn run_linux_capture_loop(
@@ -406,13 +619,16 @@ fn run_linux_capture_loop(
         };
 
         let (out_w, out_h) = config.resolution.resolve(portal.width, portal.height);
+        let caps_str = if config.resolution == ResolutionPreset::Native {
+            "video/x-raw,format=NV12".to_string()
+        } else {
+            format!("video/x-raw,format=NV12,width={out_w},height={out_h}")
+        };
         let pipeline_str = format!(
-            "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! videoscale ! video/x-raw,format=NV12,width={},height={},framerate={}/1 ! appsink name=sink emit-signals=false sync=false max-buffers=2 drop=true",
+            "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! videoscale ! {} ! appsink name=sink emit-signals=false sync=false max-buffers=2 drop=true",
             portal.fd.as_raw_fd(),
             portal.node_id,
-            out_w,
-            out_h,
-            config.fps.max(15)
+            caps_str
         );
 
         let pipeline = match gst::parse::launch(&pipeline_str) {
@@ -425,7 +641,7 @@ fn run_linux_capture_loop(
                 }
             },
             Err(err) => {
-                warn!("Failed to launch pipewiresrc pipeline: {err}");
+                error!("Failed to launch pipewiresrc pipeline ({pipeline_str}): {err}");
                 thread::sleep(Duration::from_secs(1));
                 continue;
             }
@@ -440,7 +656,8 @@ fn run_linux_capture_loop(
         };
 
         if pipeline.set_state(gst::State::Playing).is_err() {
-            warn!("Failed to start GStreamer pipewiresrc pipeline");
+            error!("Failed to start GStreamer pipewiresrc pipeline: {pipeline_str}");
+            let _ = drain_gst_bus_errors(&pipeline);
             let _ = pipeline.set_state(gst::State::Null);
             thread::sleep(Duration::from_secs(1));
             continue;
@@ -452,8 +669,8 @@ fn run_linux_capture_loop(
             CaptureTarget::AutoGame => "Auto Game".to_string(),
         };
         info!(
-            "Linux PipeWire capture started [epoch={epoch}]: {} ({}x{})",
-            display_label, out_w, out_h
+            "Linux PipeWire capture started [epoch={epoch}]: {} (portal={}x{}, out={}x{})",
+            display_label, portal.width, portal.height, out_w, out_h
         );
         let _ = evt_tx.send(CaptureOutputEvent::SourceChanged {
             epoch,
@@ -474,6 +691,7 @@ fn run_linux_capture_loop(
                         return;
                     }
                     CaptureControlCommand::SwitchTarget(new_t) => {
+                        clear_restore_token();
                         current_target = new_t;
                         epoch = epoch.saturating_add(1);
                         restart_needed = true;
@@ -486,6 +704,10 @@ fn run_linux_capture_loop(
                 }
             }
             if restart_needed {
+                break;
+            }
+            if drain_gst_bus_errors(&pipeline) {
+                restart_needed = true;
                 break;
             }
 

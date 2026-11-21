@@ -33,6 +33,7 @@ import type {
   EditorCacheStats,
   GpuVendorPreference,
   HdrMode,
+  PlatformInfo,
   MonitorInfo,
   NotificationSoundEntry,
   RateControlMode,
@@ -231,9 +232,18 @@ export function SettingsView({
 
   const [outDevices, setOutDevices] = useState<AudioDeviceInfo[]>([]);
   const [inDevices, setInDevices] = useState<AudioDeviceInfo[]>([]);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
+  const isLinux = platformInfo?.os === "linux";
   const [capturingKeyField, setCapturingKeyField] = useState<string | null>(
     null
   );
+
+  useEffect(() => {
+    void api
+      .getPlatformInfo()
+      .then(setPlatformInfo)
+      .catch(() => {});
+  }, []);
 
   const [cacheStats, setCacheStats] = useState<EditorCacheStats>({
     temp_bytes: 0,
@@ -371,7 +381,13 @@ export function SettingsView({
     setSaving(true);
     try {
       await onSaveSettings(next);
-      onNotify(t.settings.savedTitle, t.settings.savedMsg, "success");
+      onNotify(
+        t.settings.savedTitle,
+        platformInfo
+          ? t.settings.savedMsgWithPath(platformInfo.settings_path)
+          : t.settings.savedMsg,
+        "success"
+      );
     } catch (err) {
       onNotify(t.settings.saveErrorTitle, String(err), "error");
     } finally {
@@ -722,7 +738,11 @@ export function SettingsView({
           <h1 className="text-lg font-bold tracking-tight text-white">
             {t.settings.title}
           </h1>
-          <p className="text-xs text-slate-400">{t.settings.subtitle}</p>
+          <p className="text-xs text-slate-400">
+            {platformInfo
+              ? t.settings.subtitleWithPath(platformInfo.settings_path)
+              : t.settings.subtitle}
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -1181,9 +1201,13 @@ export function SettingsView({
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <ExeListEditor
-                    title={t.settings.whitelistTitle}
+                    title={
+                      isLinux
+                        ? t.settings.whitelistTitleLinux
+                        : t.settings.whitelistTitle
+                    }
                     hint={t.settings.whitelistHint}
-                    placeholder="valorant-win64-shipping.exe"
+                    placeholder={isLinux ? "cs2" : "valorant-win64-shipping.exe"}
                     addLabel={t.settings.exeAddBtn}
                     emptyLabel={t.settings.exeListEmpty}
                     items={draft.capture.games.custom_whitelist_exes}
@@ -1201,9 +1225,13 @@ export function SettingsView({
                     }
                   />
                   <ExeListEditor
-                    title={t.settings.blacklistTitle}
+                    title={
+                      isLinux
+                        ? t.settings.blacklistTitleLinux
+                        : t.settings.blacklistTitle
+                    }
                     hint={t.settings.blacklistHint}
-                    placeholder="discord.exe"
+                    placeholder={isLinux ? "discord" : "discord.exe"}
                     addLabel={t.settings.exeAddBtn}
                     emptyLabel={t.settings.exeListEmpty}
                     items={draft.capture.games.blacklist_exes}
@@ -2198,8 +2226,18 @@ export function SettingsView({
                       launch_at_startup: v,
                     }))
                   }
-                  label={t.settings.autostartLabel}
-                  hint={t.settings.autostartHint}
+                  label={
+                    isLinux
+                      ? t.settings.autostartLabelLinux
+                      : t.settings.autostartLabel
+                  }
+                  hint={
+                    platformInfo
+                      ? t.settings.autostartHintWithTarget(
+                          platformInfo.autostart_description
+                        )
+                      : t.settings.autostartHint
+                  }
                 />
               </section>
             </>

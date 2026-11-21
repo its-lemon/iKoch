@@ -193,12 +193,19 @@ fn spawn_linux_portal_shortcuts(
                 return;
             };
             rt.block_on(async move {
-                let Ok(proxy) = GlobalShortcuts::new().await else {
-                    debug!("Wayland GlobalShortcuts portal unavailable; using X11 fallback");
-                    return;
+                let proxy = match GlobalShortcuts::new().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("Wayland GlobalShortcuts portal unavailable ({e}); using X11/UI/tray fallback");
+                        return;
+                    }
                 };
-                let Ok(session) = proxy.create_session().await else {
-                    return;
+                let session = match proxy.create_session().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Wayland GlobalShortcuts create_session failed ({e}); using X11/UI/tray fallback");
+                        return;
+                    }
                 };
                 let shortcuts = [
                     NewShortcut::new("save_clip", "Save Instant Replay Clip")
@@ -212,12 +219,17 @@ fn spawn_linux_portal_shortcuts(
                     NewShortcut::new("toggle_privacy", "Toggle Privacy Mode")
                         .preferred_trigger(Some(cfg.toggle_privacy_mode.as_str())),
                 ];
-                if proxy.bind_shortcuts(&session, &shortcuts, None).await.is_err() {
+                if let Err(e) = proxy.bind_shortcuts(&session, &shortcuts, None).await {
+                    warn!("Wayland GlobalShortcuts bind_shortcuts unsupported or declined ({e}); using X11/UI/tray fallback");
                     return;
                 }
                 info!("Registered Wayland GlobalShortcuts portal bindings");
-                let Ok(mut stream) = proxy.receive_activated().await else {
-                    return;
+                let mut stream = match proxy.receive_activated().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Wayland GlobalShortcuts receive_activated failed ({e})");
+                        return;
+                    }
                 };
                 use futures_util::StreamExt;
                 while !stop_flag.load(Ordering::Relaxed) {

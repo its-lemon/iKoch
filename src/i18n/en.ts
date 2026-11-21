@@ -250,12 +250,15 @@ export const en: Translations = {
     title: "iKoch Settings",
     subtitle:
       "Saved in %APPDATA%\\iKoch\\settings.json and applied live without restart",
+    subtitleWithPath: (path: string) =>
+      `Saved in ${path} and applied live without restart`,
     unsaved: "Unsaved changes",
     applied: "Settings applied",
     saving: "Saving...",
     saveBtn: "Save & Apply",
     savedTitle: "Settings Saved & Applied",
     savedMsg: "Written to %APPDATA%\\iKoch\\settings.json",
+    savedMsgWithPath: (path: string) => `Written to ${path}`,
     saveErrorTitle: "Failed to save settings",
 
     tabCapture: "Capture & Buffer",
@@ -307,8 +310,10 @@ export const en: Translations = {
     builtinGameList: "Built-in game & engine list",
     altTabDelay: "Grace delay on Alt+Tab before pause",
     whitelistTitle: "Whitelist (.exe)",
+    whitelistTitleLinux: "Whitelist (processes)",
     whitelistHint: "Always treat these executables as games",
     blacklistTitle: "Blacklist (.exe)",
+    blacklistTitleLinux: "Blacklist (processes)",
     blacklistHint: "Never capture automatically",
     exeAddBtn: "Add",
     exeListEmpty: "List is empty",
@@ -386,8 +391,11 @@ export const en: Translations = {
     colorTextPrimary: "Text Color",
     systemTitle: "System & Startup",
     autostartLabel: "Launch with Windows (minimized to tray)",
+    autostartLabelLinux: "Launch with system (minimized to tray)",
     autostartHint:
       "Adds iKoch to Windows startup (HKCU\\...\\Run) with --minimized",
+    autostartHintWithTarget: (target: string) =>
+      `Adds iKoch to system startup (${target}) with --minimized`,
 
     hotkeysTitle: "Global Hotkeys",
     hkSaveClip: "Save replay clip",

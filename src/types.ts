@@ -443,6 +443,14 @@ export interface FrameScreenshotRequest {
   timestamp_sec: number;
 }
 
+export interface PlatformInfo {
+  os: "windows" | "linux";
+  display_server: "windows" | "wayland" | "x11";
+  settings_path: string;
+  output_dir: string;
+  autostart_description: string;
+}
+
 export type RecorderCommand =
   | { cmd: "start_buffering" }
   | { cmd: "stop_buffering" }

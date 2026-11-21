@@ -11,7 +11,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Configuration for creating or reconfiguring [`MfHardwareEncoder`] on Linux.
 #[derive(Debug, Clone)]
@@ -51,14 +51,17 @@ fn has_gst_element(name: &str) -> bool {
     gst::ElementFactory::find(name).is_some()
 }
 
-fn select_encoder_stage(cfg: &MfVideoEncoderConfig) -> Result<(&'static str, String), EncodeError> {
+fn select_encoder_candidates(
+    cfg: &MfVideoEncoderConfig,
+) -> Result<Vec<(&'static str, String)>, EncodeError> {
     let gop_frames = (cfg.fps.max(1) * cfg.gop_seconds.clamp(1, 5)).max(15);
     let kbps = cfg.bitrate_kbps.clamp(500, 120_000);
+    let mut candidates = Vec::new();
 
     match cfg.codec {
         VideoCodec::H264 => {
             if has_gst_element("nvh264enc") {
-                return Ok((
+                candidates.push((
                     "nvh264enc",
                     format!(
                         "nvh264enc bitrate={kbps} gop-size={gop_frames} rc-mode=vbr preset=low-latency-hq zerolatency=true ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=au"
@@ -66,23 +69,25 @@ fn select_encoder_stage(cfg: &MfVideoEncoderConfig) -> Result<(&'static str, Str
                 ));
             }
             if has_gst_element("vaapih264enc") {
-                return Ok((
+                candidates.push((
                     "vaapih264enc",
                     format!(
                         "vaapih264enc bitrate={kbps} keyframe-period={gop_frames} rate-control=vbr ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=au"
                     ),
                 ));
             }
-            Ok((
-                "x264enc",
-                format!(
-                    "x264enc bitrate={kbps} key-int-max={gop_frames} tune=zerolatency speed-preset=veryfast ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=au"
-                ),
-            ))
+            if has_gst_element("x264enc") {
+                candidates.push((
+                    "x264enc",
+                    format!(
+                        "x264enc bitrate={kbps} key-int-max={gop_frames} tune=zerolatency speed-preset=veryfast ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=au"
+                    ),
+                ));
+            }
         }
         VideoCodec::Hevc => {
             if has_gst_element("nvh265enc") {
-                return Ok((
+                candidates.push((
                     "nvh265enc",
                     format!(
                         "nvh265enc bitrate={kbps} gop-size={gop_frames} rc-mode=vbr preset=low-latency-hq zerolatency=true ! h265parse config-interval=1 ! video/x-h265,stream-format=byte-stream,alignment=au"
@@ -90,23 +95,61 @@ fn select_encoder_stage(cfg: &MfVideoEncoderConfig) -> Result<(&'static str, Str
                 ));
             }
             if has_gst_element("vaapih265enc") {
-                return Ok((
+                candidates.push((
                     "vaapih265enc",
                     format!(
                         "vaapih265enc bitrate={kbps} keyframe-period={gop_frames} rate-control=vbr ! h265parse config-interval=1 ! video/x-h265,stream-format=byte-stream,alignment=au"
                     ),
                 ));
             }
-            Ok((
-                "x265enc",
-                format!(
-                    "x265enc bitrate={kbps} key-int-max={gop_frames} tune=zerolatency speed-preset=veryfast ! h265parse config-interval=1 ! video/x-h265,stream-format=byte-stream,alignment=au"
-                ),
-            ))
+            if has_gst_element("x265enc") {
+                candidates.push((
+                    "x265enc",
+                    format!(
+                        "x265enc bitrate={kbps} key-int-max={gop_frames} tune=zerolatency speed-preset=veryfast ! h265parse config-interval=1 ! video/x-h265,stream-format=byte-stream,alignment=au"
+                    ),
+                ));
+            }
         }
-        VideoCodec::Av1 => Err(EncodeError::HardwareEncoderUnavailable {
-            codec: "AV1".to_string(),
-        }),
+        VideoCodec::Av1 => {
+            return Err(EncodeError::HardwareEncoderUnavailable {
+                codec: "AV1".to_string(),
+            });
+        }
+    }
+
+    if candidates.is_empty() {
+        return Err(EncodeError::HardwareEncoderUnavailable {
+            codec: format!("{:?}", cfg.codec),
+        });
+    }
+    Ok(candidates)
+}
+
+fn drain_encoder_bus(pipeline: &gst::Pipeline) {
+    let Some(bus) = pipeline.bus() else {
+        return;
+    };
+    while let Some(msg) = bus.pop() {
+        match msg.view() {
+            gst::MessageView::Error(err) => {
+                error!(
+                    "GStreamer encoder error from {:?}: {} ({:?})",
+                    err.src().map(|s| s.path_string()),
+                    err.error(),
+                    err.debug()
+                );
+            }
+            gst::MessageView::Warning(w) => {
+                warn!(
+                    "GStreamer encoder warning from {:?}: {} ({:?})",
+                    w.src().map(|s| s.path_string()),
+                    w.error(),
+                    w.debug()
+                );
+            }
+            _ => {}
+        }
     }
 }
 
@@ -115,25 +158,7 @@ impl MfHardwareEncoder {
     pub fn new(_device: &(), config: MfVideoEncoderConfig) -> Result<Self, EncodeError> {
         gst::init().map_err(|e| EncodeError::MftFailure(format!("GStreamer init: {e}")))?;
 
-        let (enc_name, enc_stage) = select_encoder_stage(&config)?;
-        let pipeline_str = format!(
-            "appsrc name=src is-live=true format=time block=false ! videoconvert ! {enc_stage} ! appsink name=sink emit-signals=false sync=false max-buffers=8 drop=false"
-        );
-        let el = gst::parse::launch(&pipeline_str)
-            .map_err(|e| EncodeError::MftFailure(format!("GStreamer parse failed: {e}")))?;
-        let pipeline = el
-            .downcast::<gst::Pipeline>()
-            .map_err(|_| EncodeError::MftFailure("Element is not Pipeline".to_string()))?;
-
-        let appsrc = pipeline
-            .by_name("src")
-            .and_then(|e| e.downcast::<gst_app::AppSrc>().ok())
-            .ok_or_else(|| EncodeError::MftFailure("Missing appsrc".to_string()))?;
-        let appsink = pipeline
-            .by_name("sink")
-            .and_then(|e| e.downcast::<gst_app::AppSink>().ok())
-            .ok_or_else(|| EncodeError::MftFailure("Missing appsink".to_string()))?;
-
+        let candidates = select_encoder_candidates(&config)?;
         let vinfo = gst_video::VideoInfo::builder(
             gst_video::VideoFormat::Nv12,
             config.width.max(2),
@@ -145,29 +170,62 @@ impl MfHardwareEncoder {
         let caps = vinfo
             .to_caps()
             .map_err(|e| EncodeError::InvalidMediaType(format!("VideoInfo caps failed: {e}")))?;
-        appsrc.set_caps(Some(&caps));
 
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|e| EncodeError::MftFailure(format!("Pipeline start failed: {e}")))?;
+        let mut last_err = String::from("No GStreamer video encoder candidate succeeded");
+        for (enc_name, enc_stage) in candidates {
+            let pipeline_str = format!(
+                "appsrc name=src is-live=true format=time block=false ! videoconvert ! {enc_stage} ! appsink name=sink emit-signals=false sync=false max-buffers=8 drop=false"
+            );
+            let Ok(el) = gst::parse::launch(&pipeline_str) else {
+                warn!("GStreamer parse failed for encoder '{enc_name}'");
+                continue;
+            };
+            let Ok(pipeline) = el.downcast::<gst::Pipeline>() else {
+                continue;
+            };
+            let Some(appsrc) = pipeline
+                .by_name("src")
+                .and_then(|e| e.downcast::<gst_app::AppSrc>().ok())
+            else {
+                continue;
+            };
+            let Some(appsink) = pipeline
+                .by_name("sink")
+                .and_then(|e| e.downcast::<gst_app::AppSink>().ok())
+            else {
+                continue;
+            };
+            appsrc.set_caps(Some(&caps));
 
-        info!(
-            "Linux GStreamer encoder '{}' started ({:?}, {}x{} @ {} fps, {} kbps)",
-            enc_name, config.codec, config.width, config.height, config.fps, config.bitrate_kbps
-        );
+            match pipeline.set_state(gst::State::Playing) {
+                Ok(_) => {
+                    info!(
+                        "Linux GStreamer encoder '{}' started ({:?}, {}x{} @ {} fps, {} kbps)",
+                        enc_name, config.codec, config.width, config.height, config.fps, config.bitrate_kbps
+                    );
+                    return Ok(Self {
+                        config,
+                        pipeline,
+                        appsrc,
+                        appsink,
+                        cached_sps: None,
+                        cached_pps: None,
+                        cached_vps: None,
+                        header_emitted: false,
+                        sequence: 0,
+                        first_pts_us: None,
+                    });
+                }
+                Err(e) => {
+                    warn!("GStreamer encoder '{enc_name}' failed to start: {e}; trying next fallback");
+                    drain_encoder_bus(&pipeline);
+                    let _ = pipeline.set_state(gst::State::Null);
+                    last_err = format!("{enc_name} start failed: {e}");
+                }
+            }
+        }
 
-        Ok(Self {
-            config,
-            pipeline,
-            appsrc,
-            appsink,
-            cached_sps: None,
-            cached_pps: None,
-            cached_vps: None,
-            header_emitted: false,
-            sequence: 0,
-            first_pts_us: None,
-        })
+        Err(EncodeError::MftFailure(last_err))
     }
 
     pub fn encode_gpu_frame(
@@ -208,6 +266,7 @@ impl MfHardwareEncoder {
     }
 
     fn drain_sink(&mut self, out: &mut Vec<EncoderOutput>) {
+        drain_encoder_bus(&self.pipeline);
         while let Some(sample) = self.appsink.try_pull_sample(gst::ClockTime::ZERO) {
             let Some(buffer) = sample.buffer() else {
                 continue;

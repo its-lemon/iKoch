@@ -25,6 +25,42 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlatformInfo {
+    pub os: String,
+    pub display_server: String,
+    pub settings_path: String,
+    pub output_dir: String,
+    pub autostart_description: String,
+}
+
+#[tauri::command]
+pub fn get_platform_info(state: State<'_, AppState>) -> PlatformInfo {
+    let settings = state.current_settings();
+    let os = if cfg!(windows) { "windows" } else { "linux" }.to_string();
+    let display_server = if cfg!(windows) {
+        "windows".to_string()
+    } else if std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var("XDG_SESSION_TYPE").is_ok_and(|v| v.eq_ignore_ascii_case("wayland"))
+    {
+        "wayland".to_string()
+    } else {
+        "x11".to_string()
+    };
+    let autostart_description = if cfg!(windows) {
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run".to_string()
+    } else {
+        "~/.config/autostart/ikoch.desktop".to_string()
+    };
+    PlatformInfo {
+        os,
+        display_server,
+        settings_path: state.settings_path().to_string_lossy().to_string(),
+        output_dir: settings.storage.output_dir.to_string_lossy().to_string(),
+        autostart_description,
+    }
+}
+
 #[tauri::command]
 pub fn get_daemon_state(state: State<'_, AppState>) -> DaemonStateSnapshot {
     state.state_snapshot()

@@ -302,16 +302,23 @@ impl Default for GameDetectionConfig {
             auto_pause_delay_secs: 5,
             use_builtin_game_list: true,
             custom_whitelist_exes: Vec::new(),
+            #[cfg(windows)]
             blacklist_exes: vec![
                 "explorer.exe".to_string(),
                 "chrome.exe".to_string(),
                 "msedge.exe".to_string(),
                 "firefox.exe".to_string(),
                 "discord.exe".to_string(),
-                "rustclip.exe".to_string(),
-                "rustclip-app.exe".to_string(),
-                "ferrix.exe".to_string(),
                 "ikoch.exe".to_string(),
+            ],
+            #[cfg(not(windows))]
+            blacklist_exes: vec![
+                "ikoch".to_string(),
+                "chrome".to_string(),
+                "chromium".to_string(),
+                "firefox".to_string(),
+                "discord".to_string(),
+                "steamwebhelper".to_string(),
             ],
         }
     }
