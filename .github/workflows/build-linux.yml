@@ -63,8 +63,10 @@ jobs:
           chmod +x src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu
           rm -rf /tmp/ffmpeg-linux64.tar.xz /tmp/ffmpeg-master-latest-linux64-gpl
 
-      - name: TypeScript check
-        run: npx tsc --noEmit
+      - name: TypeScript check & build frontend
+        run: |
+          npx tsc --noEmit
+          npm run build
 
       - name: Cargo clippy
         run: cargo clippy --workspace --all-targets
