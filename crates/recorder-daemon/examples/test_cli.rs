@@ -9,6 +9,8 @@
 //! Run automated end-to-end verification:
 //!   cargo run --example test_cli -- --self-test
 
+#[cfg(windows)]
+mod windows_cli {
 use core_audio::{
     enumerate_capture_devices, enumerate_render_devices, enumerate_render_devices_with_activity,
     start_audio_pipeline, verify_mp4_audio_with_mf_source_reader, AudioOutputEvent,
@@ -1097,7 +1099,7 @@ fn run_interactive() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1122,4 +1124,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         run_interactive()
     }
+}
+}
+
+#[cfg(windows)]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    windows_cli::main()
+}
+
+#[cfg(not(windows))]
+fn main() {
+    println!("test_cli is supported on Windows only");
 }
