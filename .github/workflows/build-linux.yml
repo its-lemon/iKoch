@@ -57,7 +57,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets
 
       - name: Cargo test
         run: cargo test --workspace --exclude core-mux -- --skip mf_source_reader

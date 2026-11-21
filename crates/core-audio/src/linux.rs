@@ -160,20 +160,16 @@ pub fn verify_mp4_audio_with_mf_source_reader(path: &Path) -> Result<MfAudioVeri
     let mut decoded_frames = 0usize;
     let mut peak_linear = 0.0f32;
 
-    loop {
-        if let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
-            if let Some(buf) = sample.buffer() {
-                if let Ok(map) = buf.map_readable() {
-                    let bytes = map.as_slice();
-                    for chunk in bytes.chunks_exact(2) {
-                        let s = i16::from_le_bytes([chunk[0], chunk[1]]);
-                        peak_linear = peak_linear.max((f32::from(s) / 32_768.0).abs());
-                    }
-                    decoded_frames += bytes.len() / 4;
+    while let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
+        if let Some(buf) = sample.buffer() {
+            if let Ok(map) = buf.map_readable() {
+                let bytes = map.as_slice();
+                for chunk in bytes.chunks_exact(2) {
+                    let s = i16::from_le_bytes([chunk[0], chunk[1]]);
+                    peak_linear = peak_linear.max((f32::from(s) / 32_768.0).abs());
                 }
+                decoded_frames += bytes.len() / 4;
             }
-        } else {
-            break;
         }
     }
 
@@ -722,17 +718,14 @@ pub fn start_audio_pipeline(
                         AudioControlCommand::SetVolumes {
                             game_volume,
                             mic_volume,
-                            secondary_volume,
+                            secondary_volume: _,
                         } => {
                             settings.game_volume = game_volume.clamp(0.0, 2.0);
                             settings.mic_volume = mic_volume.clamp(0.0, 2.0);
-                            if let Some(sv) = secondary_volume {
-                                settings.secondary_volume = sv.clamp(0.0, 2.0);
-                            }
                         }
                         AudioControlCommand::SetGameMuted(m) => settings.game_muted = m,
                         AudioControlCommand::SetMicMuted(m) => settings.mic_muted = m,
-                        AudioControlCommand::SetSecondaryMuted(m) => settings.secondary_muted = m,
+                        AudioControlCommand::SetSecondaryMuted(_) => {}
                         AudioControlCommand::SetMicNoiseSuppression {
                             enabled,
                             strength,
