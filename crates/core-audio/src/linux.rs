@@ -9,7 +9,7 @@ use core_types::{
     AudioDeviceInfo, AudioError, AudioOutputMode, AudioSettings, AudioStreamHeader, MediaPacket,
     MicActivationMode, MicDeviceConfig, MonotonicClock, TrackKind, AUDIO_CHUNK_CHANNEL_CAPACITY,
 };
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -115,7 +115,7 @@ pub enum AudioControlCommand {
     SetMicNoiseSuppression {
         enabled: bool,
         strength: f32,
-        noise_gate_db: f32,
+        noise_gate_db: Option<f32>,
     },
     SetMicActivationMode(MicActivationMode),
     SetMicSoftLimiter(bool),
@@ -306,7 +306,7 @@ fn enumerate_pulse_devices(want_monitors: bool) -> Vec<AudioDeviceInfo> {
     }
     let _ = op;
     ctx.disconnect();
-    results.borrow().clone()
+    results.take()
 }
 
 /// GStreamer-backed AAC-LC encoder (`48 kHz Stereo S16LE -> raw AAC-LC`).
@@ -522,7 +522,12 @@ impl AudioPipelineHandle {
             .send(AudioControlCommand::SetSecondaryMuted(muted));
     }
 
-    pub fn set_mic_noise_suppression(&self, enabled: bool, strength: f32, noise_gate_db: f32) {
+    pub fn set_mic_noise_suppression(
+        &self,
+        enabled: bool,
+        strength: f32,
+        noise_gate_db: Option<f32>,
+    ) {
         let _ = self.cmd_tx.send(AudioControlCommand::SetMicNoiseSuppression {
             enabled,
             strength,

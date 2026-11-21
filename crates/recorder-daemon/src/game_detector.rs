@@ -67,6 +67,7 @@ const BUILTIN_GAME_EXES: &[&str] = &[
     "deadlock.exe",
 ];
 
+#[cfg(windows)]
 const SHELL_CLASSES: &[&str] = &["progman", "workerw", "shell_traywnd", "windows.ui.core.corewindow"];
 
 /// Transition emitted by [`GameDetector::poll`].
@@ -189,6 +190,7 @@ fn clean_exe_stem_title(exe_name: &str) -> String {
     }
 }
 
+#[cfg(windows)]
 fn clean_version_info_string(raw: &str) -> Option<String> {
     let mut s = raw.trim().to_string();
     for suffix in ["-Win64-Shipping", "-Win32-Shipping", "Shipping", ".exe"] {
