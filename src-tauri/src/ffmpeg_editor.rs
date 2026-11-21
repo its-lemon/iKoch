@@ -12,13 +12,22 @@ use core_types::{
 use recorder_daemon::{load_clip_metadata, save_clip_metadata};
 use serde::{Deserialize, Serialize};
 use std::fs;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn apply_no_window(cmd: &mut Command) {
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
 
 /// Audio stream metadata discovered by `ffprobe`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,8 +74,16 @@ pub struct PreparedEditorMedia {
 /// 2) inside `src-tauri/binaries/` (`CARGO_MANIFEST_DIR`),
 /// 3) fallback on system `PATH`.
 pub fn resolve_sidecar_binary(tool: &str) -> Result<PathBuf, String> {
-    let target_name = format!("{tool}-x86_64-pc-windows-msvc.exe");
-    let plain_name = format!("{tool}.exe");
+    #[cfg(windows)]
+    let (target_name, plain_name) = (
+        format!("{tool}-x86_64-pc-windows-msvc.exe"),
+        format!("{tool}.exe"),
+    );
+    #[cfg(not(windows))]
+    let (target_name, plain_name) = (
+        format!("{tool}-x86_64-unknown-linux-gnu"),
+        tool.to_string(),
+    );
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
@@ -87,6 +104,14 @@ pub fn resolve_sidecar_binary(tool: &str) -> Result<PathBuf, String> {
         }
     }
 
+    #[cfg(not(windows))]
+    {
+        let usr_bin = PathBuf::from("/usr/bin").join(&plain_name);
+        if usr_bin.is_file() {
+            return Ok(usr_bin);
+        }
+    }
+
     // Fallback to PATH search (works cleanly if ffmpeg/ffprobe are globally installed).
     if let Ok(path_var) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path_var) {
@@ -104,7 +129,7 @@ pub fn resolve_sidecar_binary(tool: &str) -> Result<PathBuf, String> {
 
 fn hidden_cmd(bin: &Path) -> Command {
     let mut cmd = Command::new(bin);
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    apply_no_window(&mut cmd);
     cmd
 }
 

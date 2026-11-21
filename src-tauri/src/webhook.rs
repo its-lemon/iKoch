@@ -1,11 +1,13 @@
 //! Optional Discord Webhook file uploader using Windows `curl.exe` (`CREATE_NO_WINDOW`).
 
 use std::fs;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 use uuid::Uuid;
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Uploads `file_path` (e.g. a Discord-compressed `.mp4` or `.gif`) via HTTPS multipart POST to
@@ -30,8 +32,14 @@ pub fn send_file_to_discord_webhook(
     .to_string();
 
     let resp_path = std::env::temp_dir().join(format!("ikoch_webhook_{}.txt", Uuid::new_v4()));
-    let mut cmd = Command::new("C:\\Windows\\System32\\curl.exe");
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = Command::new("C:\\Windows\\System32\\curl.exe");
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut cmd = Command::new("curl");
     cmd.arg("-sS")
         .arg("-o")
         .arg(&resp_path)

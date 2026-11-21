@@ -1,9 +1,9 @@
-//! Windows Shell File Clipboard (`CF_HDROP`) implementation.
-//!
-//! Places one or more video/screenshot file paths onto the Windows clipboard in the native
-//! Explorer `CF_HDROP` (`DROPFILES`) format so pressing `Ctrl+V` pastes the actual `.mp4`
-//! directly into Discord, Telegram, Slack, or Windows Explorer.
+//! Cross-platform Shell File Clipboard:
+//! - Windows: `CF_HDROP` (`DROPFILES`)
+//! - Linux: `text/uri-list` via `wl-copy` (Wayland) or `xclip` (X11)
 
+#[cfg(windows)]
+mod platform_impl {
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ use windows::Win32::System::Memory::{
 const CF_HDROP: u32 = 15;
 const DROPFILES_HEADER_BYTES: usize = 20;
 
-fn normalize_windows_clipboard_path(path: &Path) -> Result<PathBuf, String> {
+pub(super) fn normalize_windows_clipboard_path(path: &Path) -> Result<PathBuf, String> {
     if !path.exists() {
         return Err(format!("File '{}' does not exist", path.display()));
     }
@@ -158,8 +158,71 @@ pub fn read_clipboard_cf_hdrop_files() -> Result<Vec<PathBuf>, String> {
     let _ = unsafe { GlobalUnlock(hglobal) };
     Ok(files)
 }
+}
 
-#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod platform_impl {
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+
+    /// Copies `path` to the Linux Wayland/X11 clipboard as `text/uri-list` for `Ctrl+V` pasting.
+    pub fn copy_file_to_clipboard_cf_hdrop(path: &Path) -> Result<(), String> {
+        if !path.exists() {
+            return Err(format!("File '{}' does not exist", path.display()));
+        }
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let uri = format!("file://{}\r\n", canonical.display());
+
+        if let Ok(mut child) = Command::new("wl-copy")
+            .args(["--type", "text/uri-list"])
+            .stdin(Stdio::piped())
+            .spawn()
+        {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(uri.as_bytes());
+            }
+            if child.wait().is_ok_and(|s| s.success()) {
+                return Ok(());
+            }
+        }
+
+        let mut child = Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "text/uri-list", "-i"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Install wl-clipboard (Wayland) or xclip (X11): {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(uri.as_bytes());
+        }
+        let status = child.wait().map_err(|e| format!("xclip wait failed: {e}"))?;
+        if !status.success() {
+            return Err("xclip failed to write text/uri-list".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn read_clipboard_cf_hdrop_files() -> Result<Vec<PathBuf>, String> {
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+mod platform_impl {
+    use std::path::{Path, PathBuf};
+
+    pub fn copy_file_to_clipboard_cf_hdrop(_path: &Path) -> Result<(), String> {
+        Err("Clipboard file copy is not supported on this platform".to_string())
+    }
+
+    pub fn read_clipboard_cf_hdrop_files() -> Result<Vec<PathBuf>, String> {
+        Ok(Vec::new())
+    }
+}
+
+pub use platform_impl::{copy_file_to_clipboard_cf_hdrop, read_clipboard_cf_hdrop_files};
+
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use std::fs;
@@ -174,7 +237,7 @@ mod tests {
 
         copy_file_to_clipboard_cf_hdrop(&test_mp4)?;
         let pasted = read_clipboard_cf_hdrop_files()?;
-        let expected = normalize_windows_clipboard_path(&test_mp4)?;
+        let expected = platform_impl::normalize_windows_clipboard_path(&test_mp4)?;
 
         assert!(
             pasted.iter().any(|p| {

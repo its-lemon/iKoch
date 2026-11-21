@@ -16,5 +16,12 @@ parking_lot.workspace = true
 rubato.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
 wasapi.workspace = true
 windows.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gstreamer.workspace = true
+gstreamer-app.workspace = true
+libpulse-binding.workspace = true

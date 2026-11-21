@@ -19,6 +19,7 @@ use recorder_daemon::{
     save_clip_metadata,
 };
 use std::fs;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -306,11 +307,21 @@ pub async fn send_to_discord_webhook(
 pub fn open_clips_folder(state: State<'_, AppState>) -> Result<(), String> {
     let dir = state.current_settings().storage.output_dir;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Command::new("explorer.exe")
-        .creation_flags(0x0800_0000)
-        .arg(&dir)
-        .spawn()
-        .map_err(|e| format!("Failed to open Explorer: {e}"))?;
+    #[cfg(windows)]
+    {
+        Command::new("explorer.exe")
+            .creation_flags(0x0800_0000)
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| format!("Failed to open Explorer: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| format!("Failed to launch xdg-open: {e}"))?;
+    }
     Ok(())
 }
 
@@ -321,16 +332,45 @@ pub fn reveal_clip_in_explorer(path: String) -> Result<(), String> {
         return Err(format!("Файл '{}' не найден", target.display()));
     }
     let resolved = fs::canonicalize(&target).unwrap_or(target);
-    let mut display = resolved.to_string_lossy().to_string();
-    if let Some(stripped) = display.strip_prefix(r"\\?\") {
-        display = stripped.to_string();
+    #[cfg(windows)]
+    {
+        let mut display = resolved.to_string_lossy().to_string();
+        if let Some(stripped) = display.strip_prefix(r"\\?\") {
+            display = stripped.to_string();
+        }
+        let escaped = display.replace('"', "");
+        Command::new("explorer.exe")
+            .creation_flags(0x0800_0000)
+            .raw_arg(format!("/select,\"{escaped}\""))
+            .spawn()
+            .map_err(|e| format!("Failed to launch Explorer: {e}"))?;
     }
-    let escaped = display.replace('"', "");
-    Command::new("explorer.exe")
-        .creation_flags(0x0800_0000)
-        .raw_arg(format!("/select,\"{escaped}\""))
-        .spawn()
-        .map_err(|e| format!("Failed to launch Explorer: {e}"))?;
+    #[cfg(target_os = "linux")]
+    {
+        let uri = format!("file://{}", resolved.display());
+        let gdbus_ok = Command::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                "org.freedesktop.FileManager1",
+                "--object-path",
+                "/org/freedesktop/FileManager1",
+                "--method",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("['{uri}']"),
+                "",
+            ])
+            .status()
+            .is_ok_and(|s| s.success());
+        if !gdbus_ok {
+            let folder = resolved.parent().unwrap_or(&resolved);
+            Command::new("xdg-open")
+                .arg(folder)
+                .spawn()
+                .map_err(|e| format!("Failed to open folder via xdg-open: {e}"))?;
+        }
+    }
     Ok(())
 }
 

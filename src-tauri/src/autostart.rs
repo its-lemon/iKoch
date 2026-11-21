@@ -1,6 +1,8 @@
-//! Windows startup registry integration (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`).
-//!
-//! Registers or removes `"<exe_path>" --minimized` so iKoch starts silently in the system tray.
+//! Windows startup registry integration (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`)
+//! and Linux XDG autostart (`~/.config/autostart/ikoch.desktop`).
+
+#[cfg(windows)]
+mod platform_impl {
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -143,3 +145,61 @@ pub fn is_windows_autostart_enabled() -> bool {
     }
     found
 }
+}
+
+#[cfg(target_os = "linux")]
+mod platform_impl {
+    use std::fs;
+    use std::path::PathBuf;
+    use tracing::info;
+
+    fn desktop_file_path() -> Result<PathBuf, String> {
+        let config_home = std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))
+            .ok_or_else(|| "Cannot resolve XDG_CONFIG_HOME or HOME".to_string())?;
+        Ok(config_home.join("autostart").join("ikoch.desktop"))
+    }
+
+    pub fn sync_windows_autostart(enabled: bool) -> Result<(), String> {
+        let path = desktop_file_path()?;
+        if enabled {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("create autostart dir: {e}"))?;
+            }
+            let exe = std::env::current_exe()
+                .map_err(|e| format!("resolve current_exe: {e}"))?;
+            let contents = format!(
+                "[Desktop Entry]\nType=Application\nName=iKoch\nExec=\"{}\" --minimized\nX-GNOME-Autostart-enabled=true\nTerminal=false\n",
+                exe.display()
+            );
+            fs::write(&path, contents).map_err(|e| format!("write autostart .desktop: {e}"))?;
+            info!("Linux XDG autostart ENABLED -> {}", path.display());
+        } else if path.exists() {
+            fs::remove_file(&path).map_err(|e| format!("remove autostart .desktop: {e}"))?;
+            info!("Linux XDG autostart DISABLED");
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn is_windows_autostart_enabled() -> bool {
+        desktop_file_path().is_ok_and(|p| p.exists())
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+mod platform_impl {
+    pub fn sync_windows_autostart(_enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn is_windows_autostart_enabled() -> bool {
+        false
+    }
+}
+
+pub use platform_impl::{is_windows_autostart_enabled, sync_windows_autostart};

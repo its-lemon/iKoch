@@ -38,7 +38,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
+#[cfg(windows)]
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+#[cfg(windows)]
 use windows::Win32::System::Threading::GetCurrentProcess;
 
 enum MuxThreadMsg {
@@ -378,6 +380,7 @@ fn run_mux_loop(mux_rx: Receiver<MuxThreadMsg>) {
     }
 }
 
+#[cfg(windows)]
 fn process_working_set_mb() -> f64 {
     let mut counters = PROCESS_MEMORY_COUNTERS::default();
     let ok = unsafe {
@@ -392,6 +395,11 @@ fn process_working_set_mb() -> f64 {
     } else {
         0.0
     }
+}
+
+#[cfg(not(windows))]
+fn process_working_set_mb() -> f64 {
+    0.0
 }
 
 struct Mp4Inspection {

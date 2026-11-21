@@ -6,18 +6,26 @@
 
 use core_capture::{query_process_exe_name, query_process_exe_path};
 use core_types::{DetectedGameInfo, GameDetectionConfig};
+#[cfg(windows)]
 use std::ffi::OsString;
+#[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+#[cfg(windows)]
 use windows::core::PCWSTR;
+#[cfg(windows)]
 use windows::Win32::Foundation::{HWND, RECT};
+#[cfg(windows)]
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+#[cfg(windows)]
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
 };
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
@@ -202,6 +210,7 @@ fn clean_version_info_string(raw: &str) -> Option<String> {
 }
 
 /// Reads `FileDescription` or `ProductName` from a PE executable's `VS_VERSION_INFO` resource.
+#[cfg(windows)]
 #[must_use]
 pub fn read_exe_version_description(exe_path: &Path) -> Option<String> {
     let wide_path: Vec<u16> = exe_path
@@ -280,6 +289,13 @@ pub fn read_exe_version_description(exe_path: &Path) -> Option<String> {
             }
         }
     }
+    None
+}
+
+/// Reads `FileDescription` or `ProductName` from a PE executable's `VS_VERSION_INFO` resource.
+#[cfg(not(windows))]
+#[must_use]
+pub fn read_exe_version_description(_exe_path: &Path) -> Option<String> {
     None
 }
 
@@ -369,8 +385,11 @@ impl GameDetector {
             );
             sys.process(target_pid).is_some()
         });
+        #[cfg(windows)]
         let process_alive = sys_alive
             && unsafe { IsWindow(Some(HWND(current.hwnd as *mut _))) }.as_bool();
+        #[cfg(not(windows))]
+        let process_alive = sys_alive;
 
         if !process_alive {
             self.active_game = None;
@@ -390,11 +409,108 @@ impl GameDetector {
     }
 }
 
+#[cfg(windows)]
 fn probe_foreground_game(cfg: &GameDetectionConfig) -> Option<DetectedGameInfo> {
     let fg = unsafe { GetForegroundWindow() }.0 as isize;
     probe_window_as_game(fg, cfg)
 }
 
+#[cfg(target_os = "linux")]
+fn probe_foreground_game(cfg: &GameDetectionConfig) -> Option<DetectedGameInfo> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+
+    if let Ok((conn, screen_num)) = x11rb::connect(None) {
+        if let Some(screen) = conn.setup().roots.get(screen_num) {
+            if let (Ok(a_act), Ok(a_pid), Ok(a_name), Ok(a_utf8)) = (
+                conn.intern_atom(false, b"_NET_ACTIVE_WINDOW").and_then(|c| Ok(c.reply())),
+                conn.intern_atom(false, b"_NET_WM_PID").and_then(|c| Ok(c.reply())),
+                conn.intern_atom(false, b"_NET_WM_NAME").and_then(|c| Ok(c.reply())),
+                conn.intern_atom(false, b"UTF8_STRING").and_then(|c| Ok(c.reply())),
+            ) {
+                if let (Ok(a_act), Ok(a_pid), Ok(a_name), Ok(a_utf8)) =
+                    (a_act, a_pid, a_name, a_utf8)
+                {
+                    if let Some(win) = conn
+                        .get_property(false, screen.root, a_act.atom, AtomEnum::WINDOW, 0, 1)
+                        .ok()
+                        .and_then(|c| c.reply().ok())
+                        .and_then(|r| r.value32().and_then(|mut it| it.next()))
+                    {
+                        if win != 0 {
+                            let pid = conn
+                                .get_property(false, win, a_pid.atom, AtomEnum::CARDINAL, 0, 1)
+                                .ok()
+                                .and_then(|c| c.reply().ok())
+                                .and_then(|r| r.value32().and_then(|mut it| it.next()))
+                                .unwrap_or(0);
+                            if pid > 0 && pid != std::process::id() {
+                                let exe_path = query_process_exe_path(pid);
+                                let exe_name = exe_path
+                                    .as_deref()
+                                    .and_then(|p| p.file_name())
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .or_else(|| query_process_exe_name(pid))?;
+                                let title = conn
+                                    .get_property(false, win, a_name.atom, a_utf8.atom, 0, 512)
+                                    .ok()
+                                    .and_then(|c| c.reply().ok())
+                                    .and_then(|r| String::from_utf8(r.value).ok())
+                                    .unwrap_or_default()
+                                    .trim()
+                                    .to_string();
+                                let fullscreen = conn
+                                    .get_geometry(win)
+                                    .ok()
+                                    .and_then(|c| c.reply().ok())
+                                    .is_some_and(|g| {
+                                        g.width >= screen.width_in_pixels.saturating_sub(2)
+                                            && g.height >= screen.height_in_pixels.saturating_sub(2)
+                                    });
+                                if classify_executable(&exe_name, fullscreen, cfg).is_some() {
+                                    let display_name = resolve_human_game_name(
+                                        exe_path.as_deref(),
+                                        &exe_name,
+                                        &title,
+                                    );
+                                    return Some(DetectedGameInfo {
+                                        process_id: pid,
+                                        executable_name: exe_name,
+                                        display_name,
+                                        window_title: title,
+                                        hwnd: isize::try_from(win).unwrap_or(0),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Wayland / headless fallback: scan `/proc` via `sysinfo` for known or whitelisted games.
+    let mut sys = System::new_all();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    for (pid, proc_info) in sys.processes() {
+        let exe_name = proc_info.name().to_string_lossy().into_owned();
+        if classify_executable(&exe_name, false, cfg).is_some() {
+            let pid_u32 = pid.as_u32();
+            let exe_path = proc_info.exe().map(Path::to_path_buf);
+            let display_name = resolve_human_game_name(exe_path.as_deref(), &exe_name, "");
+            return Some(DetectedGameInfo {
+                process_id: pid_u32,
+                executable_name: exe_name,
+                display_name,
+                window_title: String::new(),
+                hwnd: 0,
+            });
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
 fn probe_window_as_game(hwnd_raw: isize, cfg: &GameDetectionConfig) -> Option<DetectedGameInfo> {
     if hwnd_raw == 0 {
         return None;
@@ -452,6 +568,7 @@ fn probe_window_as_game(hwnd_raw: isize, cfg: &GameDetectionConfig) -> Option<De
     })
 }
 
+#[cfg(windows)]
 fn is_fullscreen_or_borderless(hwnd: HWND) -> bool {
     let mut win_rc = RECT::default();
     if unsafe { GetWindowRect(hwnd, &mut win_rc) }.is_err() {
@@ -476,6 +593,7 @@ fn is_fullscreen_or_borderless(hwnd: HWND) -> bool {
     win_w >= mon_w - 2 && win_h >= mon_h - 2
 }
 
+#[cfg(windows)]
 fn read_window_title_raw(hwnd: HWND) -> String {
     let mut buf = [0u16; 256];
     let len = unsafe { GetWindowTextW(hwnd, &mut buf) };
@@ -488,6 +606,7 @@ fn read_window_title_raw(hwnd: HWND) -> String {
     }
 }
 
+#[cfg(windows)]
 fn read_window_class(hwnd: HWND) -> String {
     let mut buf = [0u16; 128];
     let len = unsafe { GetClassNameW(hwnd, &mut buf) };

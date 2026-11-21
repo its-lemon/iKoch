@@ -5,7 +5,15 @@ use core_types::AudioError;
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
 use std::collections::VecDeque;
+#[cfg(windows)]
 use wasapi::SampleType;
+
+#[cfg(not(windows))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SampleType {
+    Float,
+    Int,
+}
 
 /// Fixed output sample rate required by the AAC pipeline.
 pub const TARGET_SAMPLE_RATE_HZ: u32 = 48_000;

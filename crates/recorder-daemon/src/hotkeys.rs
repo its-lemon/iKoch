@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{debug, info, warn};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
 };
@@ -112,25 +113,33 @@ fn run_hotkey_loop(
     action_tx: Sender<HotkeyAction>,
     stop_flag: Arc<AtomicBool>,
 ) {
+    #[cfg(target_os = "linux")]
+    let _portal_guard = spawn_linux_portal_shortcuts(&initial, action_tx.clone(), Arc::clone(&stop_flag));
+
     let manager = match GlobalHotKeyManager::new() {
-        Ok(m) => m,
+        Ok(m) => Some(m),
         Err(err) => {
             warn!("GlobalHotKeyManager unavailable: {err}");
-            return;
+            None
         }
     };
 
     let mut registered: HashMap<u32, (HotKey, HotkeyAction)> = HashMap::new();
-    apply_bindings(&manager, &initial, &mut registered);
+    if let Some(mgr) = manager.as_ref() {
+        apply_bindings(mgr, &initial, &mut registered);
+    }
 
     let event_rx = GlobalHotKeyEvent::receiver();
 
     while !stop_flag.load(Ordering::Relaxed) {
         // Pump Win32 message queue on this thread so RegisterHotKey WM_HOTKEY fires.
-        let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            let _ = unsafe { TranslateMessage(&msg) };
-            unsafe { DispatchMessageW(&msg) };
+        #[cfg(windows)]
+        {
+            let mut msg = MSG::default();
+            while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+                let _ = unsafe { TranslateMessage(&msg) };
+                unsafe { DispatchMessageW(&msg) };
+            }
         }
 
         while let Ok(evt) = event_rx.try_recv() {
@@ -144,9 +153,15 @@ fn run_hotkey_loop(
 
         while let Ok(cmd) = cmd_rx.try_recv() {
             match cmd {
-                HotkeyControl::Rebind(new_cfg) => apply_bindings(&manager, &new_cfg, &mut registered),
+                HotkeyControl::Rebind(new_cfg) => {
+                    if let Some(mgr) = manager.as_ref() {
+                        apply_bindings(mgr, &new_cfg, &mut registered);
+                    }
+                }
                 HotkeyControl::Stop => {
-                    unregister_all_map(&manager, &mut registered);
+                    if let Some(mgr) = manager.as_ref() {
+                        unregister_all_map(mgr, &mut registered);
+                    }
                     return;
                 }
             }
@@ -155,7 +170,78 @@ fn run_hotkey_loop(
         thread::sleep(Duration::from_millis(12));
     }
 
-    unregister_all_map(&manager, &mut registered);
+    if let Some(mgr) = manager.as_ref() {
+        unregister_all_map(mgr, &mut registered);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_linux_portal_shortcuts(
+    initial: &HotkeySettings,
+    action_tx: Sender<HotkeyAction>,
+    stop_flag: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+    let cfg = initial.clone();
+    thread::Builder::new()
+        .name("ikoch-wayland-hotkeys".to_string())
+        .spawn(move || {
+            let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                return;
+            };
+            rt.block_on(async move {
+                let Ok(proxy) = GlobalShortcuts::new().await else {
+                    debug!("Wayland GlobalShortcuts portal unavailable; using X11 fallback");
+                    return;
+                };
+                let Ok(session) = proxy.create_session().await else {
+                    return;
+                };
+                let shortcuts = [
+                    NewShortcut::new("save_clip", "Save Instant Replay Clip")
+                        .preferred_trigger(Some(cfg.save_clip.as_str())),
+                    NewShortcut::new("toggle_session", "Start / Stop Session Recording")
+                        .preferred_trigger(Some(cfg.toggle_session.as_str())),
+                    NewShortcut::new("add_bookmark", "Add Bookmark Marker")
+                        .preferred_trigger(Some(cfg.add_bookmark.as_str())),
+                    NewShortcut::new("toggle_mic_mute", "Mute / Unmute Microphone")
+                        .preferred_trigger(Some(cfg.toggle_mic_mute.as_str())),
+                    NewShortcut::new("toggle_privacy", "Toggle Privacy Mode")
+                        .preferred_trigger(Some(cfg.toggle_privacy_mode.as_str())),
+                ];
+                if proxy.bind_shortcuts(&session, &shortcuts, None).await.is_err() {
+                    return;
+                }
+                info!("Registered Wayland GlobalShortcuts portal bindings");
+                let Ok(mut stream) = proxy.receive_activated().await else {
+                    return;
+                };
+                use futures_util::StreamExt;
+                while !stop_flag.load(Ordering::Relaxed) {
+                    tokio::select! {
+                        maybe_evt = stream.next() => {
+                            let Some(evt) = maybe_evt else { break };
+                            let action = match evt.shortcut_id() {
+                                "save_clip" => Some(HotkeyAction::SaveClip),
+                                "toggle_session" => Some(HotkeyAction::ToggleSession),
+                                "add_bookmark" => Some(HotkeyAction::AddBookmark),
+                                "toggle_mic_mute" => Some(HotkeyAction::ToggleMicMute),
+                                "toggle_privacy" => Some(HotkeyAction::TogglePrivacyMode),
+                                _ => None,
+                            };
+                            if let Some(act) = action {
+                                let _ = action_tx.try_send(act);
+                            }
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                    }
+                }
+            });
+        })
+        .ok()
 }
 
 fn unregister_all_map(
