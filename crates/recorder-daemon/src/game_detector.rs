@@ -492,21 +492,22 @@ fn probe_foreground_game(cfg: &GameDetectionConfig) -> Option<DetectedGameInfo> 
     }
 
     // Wayland / headless fallback: scan `/proc` via `sysinfo` for known or whitelisted games.
-    let mut sys = System::new_all();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    for (pid, proc_info) in sys.processes() {
-        let exe_name = proc_info.name().to_string_lossy().into_owned();
-        if classify_executable(&exe_name, false, cfg).is_some() {
-            let pid_u32 = pid.as_u32();
-            let exe_path = proc_info.exe().map(Path::to_path_buf);
-            let display_name = resolve_human_game_name(exe_path.as_deref(), &exe_name, "");
-            return Some(DetectedGameInfo {
-                process_id: pid_u32,
-                executable_name: exe_name,
-                display_name,
-                window_title: String::new(),
-                hwnd: 0,
-            });
+    if let Ok(mut sys) = System::new_all() {
+        sys.refresh_processes(ProcessesToUpdate::All, true);
+        for (pid, proc_info) in sys.processes() {
+            let exe_name = proc_info.name().to_string_lossy().into_owned();
+            if classify_executable(&exe_name, false, cfg).is_some() {
+                let pid_u32 = pid.as_u32();
+                let exe_path = proc_info.exe().map(Path::to_path_buf);
+                let display_name = resolve_human_game_name(exe_path.as_deref(), &exe_name, "");
+                return Some(DetectedGameInfo {
+                    process_id: pid_u32,
+                    executable_name: exe_name,
+                    display_name,
+                    window_title: String::new(),
+                    hwnd: 0,
+                });
+            }
         }
     }
     None

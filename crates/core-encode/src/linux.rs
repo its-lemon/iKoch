@@ -1,9 +1,7 @@
 //! Linux hardware/software video encoding (H.264 / HEVC) via GStreamer:
 //! `appsrc (NV12) -> videoconvert -> nvh264enc / vaapih264enc / x264enc -> h264parse (Annex-B) -> appsink`.
 
-use crate::bitstream::{
-    build_video_stream_header, parse_annex_b_access_unit, split_annex_b_nalus,
-};
+use crate::bitstream::{build_video_stream_header, parse_annex_b_access_unit};
 use core_capture::GpuTextureFrame;
 use core_types::{
     EncodeError, GpuVendorPreference, MediaPacket, RateControlMode, TrackKind, VideoCodec,
@@ -222,8 +220,7 @@ impl MfHardwareEncoder {
                 continue;
             }
 
-            let nalus = split_annex_b_nalus(annex_b);
-            let parsed = parse_annex_b_access_unit(self.config.codec, &nalus);
+            let parsed = parse_annex_b_access_unit(self.config.codec, annex_b);
             if let Some(vps) = parsed.vps {
                 self.cached_vps = Some(vps);
             }
@@ -236,22 +233,21 @@ impl MfHardwareEncoder {
 
             if !self.header_emitted {
                 if let (Some(sps), Some(pps)) = (&self.cached_sps, &self.cached_pps) {
-                    if let Ok(hdr) = build_video_stream_header(
+                    let hdr = build_video_stream_header(
                         self.config.codec,
                         self.config.width,
                         self.config.height,
                         self.config.fps,
-                        self.cached_vps.as_deref(),
-                        sps,
-                        pps,
-                    ) {
-                        self.header_emitted = true;
-                        out.push(EncoderOutput::StreamHeader(hdr));
-                    }
+                        self.cached_vps.clone(),
+                        sps.clone(),
+                        pps.clone(),
+                    );
+                    self.header_emitted = true;
+                    out.push(EncoderOutput::StreamHeader(hdr));
                 }
             }
 
-            if !self.header_emitted || parsed.avcc_sample.is_empty() {
+            if !self.header_emitted || parsed.length_prefixed_payload.is_empty() {
                 continue;
             }
 
@@ -273,7 +269,7 @@ impl MfHardwareEncoder {
                 duration_us,
                 parsed.is_keyframe,
                 self.sequence,
-                parsed.avcc_sample,
+                parsed.length_prefixed_payload,
             )));
         }
     }
