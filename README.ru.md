@@ -27,7 +27,7 @@
 ### ✨ Основные возможности
 - **Мгновенный откат (`F9`)** — кольцевой буфер в ОЗУ (15–300 сек), сохраняющий клип ровно по ключевым кадрам (IDR).
 - **Полная запись сессий (`F10`)** — отказоустойчивая запись в `.fmp4` с автоматическим ремуксом в `faststart` MP4.
-- **Автоопределение игр** — сам находит запущенную игру, ставит запись на паузу при сворачивании (Alt+Tab) или захватывает выбранный монитор/окно.
+- **Автоопределение игр** — сам находит запущенную игру, ставит запись на паузу при сворачивании (Alt+Tab) или захватывает выбранный монитор/окно (поддерживает как нативные Linux-игры, так и игры через Proton/Wine).
 - **Многодорожечный звук** — итоговый микс (`Mixed Audio`) + отдельные дорожки `Игра`, `Микрофон` (**RNNoise**, **Noise Gate**, **Soft Limiter**, Push-to-Talk) и дополнительный источник.
 - **Встроенный редактор** — быстрая обрезка без перекодирования, склейка фрагментов, скорость (`0.25x–4.0x`), форматы `16:9` / `9:16` (вертикальный с размытием) / `1:1`, микшер громкости дорожек, сжатие под Discord (`10 МБ` / `50 МБ` / свой размер), экспорт в GIF и PNG, копирование файла в буфер (`Ctrl+V`).
 - **Темы и языки** — русский и английский интерфейс, 8 готовых тем + конструктор своей темы в реальном времени.
@@ -39,10 +39,13 @@
 
 Linux-версия развивается в отдельной ветке [`linux`](https://github.com/its-lemon/iKoch/tree/linux) и использует общие крейты `core-mux`, `core-types`, `recorder-daemon` и React-интерфейс, изолируя платформенный захват, кодирование и звук:
 
-- **Захват экрана и окон:** `xdg-desktop-portal` (`ashpd`) + **PipeWire** + пайплайн **GStreamer** с автоматическим выбором аппаратного энкодера (`nvh264enc` / `vaapih264enc` / `x264enc` fallback).
+- **Захват экрана и окон:**
+  - **Приоритетный режим (`gpu-screen-recorder`):** если в `PATH` установлен `gpu-screen-recorder` (принцип работы как в Vice), iKoch автоматически использует его для максимальной производительности на Wayland/X11;
+  - **Встроенный fallback (`ashpd` + GStreamer):** `xdg-desktop-portal` + **PipeWire** + **GStreamer** (`nvh264enc` / `vaapih264enc` / `x264enc`) работает «из коробки» без внешних утилит.
 - **Звук:** **PipeWire / PulseAudio** (`libpulse-binding`) с той же схемой 3/4 дорожек (`Mixed`, `Game`, `Mic`, `Secondary`), шумоподавлением `nnnoiseless` (RNNoise) и Soft Limiter.
 - **Системная интеграция:**
-  - Глобальные горячие клавиши через **Wayland GlobalShortcuts Portal** (`ashpd`) или **X11**;
+  - Глобальные горячие клавиши через **Wayland GlobalShortcuts Portal** (`ashpd`), **X11** или `/dev/input/event*` (`evdev` fallback при наличии пользователя в группе `input`);
+  - Системный трей через `libayatana-appindicator3` / `libappindicator3` (если библиотека отсутствует — приложение запускает главное окно напрямую без падения);
   - Автозапуск через `~/.config/autostart/ikoch.desktop`;
   - Копирование файлов в буфер обмена через `wl-copy` (Wayland) / `xclip` (X11);
   - Открытие папки и выделение файла через D-Bus (`org.freedesktop.FileManager1`) / `xdg-open`.
@@ -58,7 +61,7 @@ Linux-версия развивается в отдельной ветке [`lin
 - **`Edited/`** — все файлы из Редактора (обрезка, `9:16`, сжатие под Discord, GIF, PNG, sub-clips)
 - **`Sessions/<Игра или Screen>/`** — длинные записи сессий (`F10`)
 
-Метаданные (`.json`), превью (`.jpg`), временные файлы (`.tmp`) и логи хранятся отдельно (`%LOCALAPPDATA%\iKoch\` на Windows, `~/.local/share/ikoch/` на Linux), не засоряя папки с видео.
+Метаданные (`.json`), превью (`.jpg`), временные файлы (`.tmp`) и логи хранятся отдельно (`%LOCALAPPDATA%\iKoch\` на Windows, `~/.local/share/iKoch/` на Linux), не засоряя папки с видео.
 
 ### ⌨️ Горячие клавиши по умолчанию
 | Клавиша | Действие |
@@ -93,7 +96,7 @@ Linux-версия развивается в отдельной ветке [`lin
      ```bash
      sudo apt update
      sudo apt install -y \
-       libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
+       libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev \
        libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
        gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
        libpipewire-0.3-dev libpulse-dev libasound2-dev libxdo-dev ffmpeg
@@ -101,9 +104,13 @@ Linux-версия развивается в отдельной ветке [`lin
    - **Arch / CachyOS:**
      ```bash
      sudo pacman -S --needed \
-       webkit2gtk-4.1 libappindicator-gtk3 librsvg openssl patchelf \
+       webkit2gtk-4.1 libayatana-appindicator librsvg openssl patchelf \
        gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav \
        pipewire libpulse alsa-lib xdotool ffmpeg
+     ```
+   - *(Опционально для максимальной производительности на Wayland)* установите `gpu-screen-recorder` и добавьте пользователя в группу `input` для `evdev`-хоткеев:
+     ```bash
+     sudo usermod -aG input "$USER"
      ```
 3. Скопируйте или сделайте симлинки системных `ffmpeg` и `ffprobe` в `src-tauri/binaries/`:
    ```bash

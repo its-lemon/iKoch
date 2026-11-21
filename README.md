@@ -39,10 +39,13 @@
 
 The Linux backend lives in the dedicated [`linux`](https://github.com/its-lemon/iKoch/tree/linux) branch and reuses the shared `core-mux`, `core-types`, `recorder-daemon`, and React frontend while isolating platform-specific capture, encoding, and audio:
 
-- **Screen & Window Capture:** `xdg-desktop-portal` (`ashpd`) + **PipeWire** + **GStreamer** pipeline with automatic hardware encoder selection (`nvh264enc` / `vaapih264enc` / `x264enc` fallback).
+- **Screen & Window Capture:**
+  - **Priority (`gpu-screen-recorder`):** if `gpu-screen-recorder` is installed in `PATH` (same approach as Vice), iKoch uses it automatically for maximum Wayland/X11 performance;
+  - **Built-in Fallback (`ashpd` + GStreamer):** `xdg-desktop-portal` + **PipeWire** + **GStreamer** pipeline (`nvh264enc` / `vaapih264enc` / `x264enc` fallback) works out of the box without extra tools.
 - **Audio:** **PipeWire / PulseAudio** (`libpulse-binding`) preserving the same 3/4-track layout (`Mixed`, `Game`, `Mic`, `Secondary`) with `nnnoiseless` RNNoise suppression and Soft Limiter.
 - **Desktop Integration:**
-  - Global hotkeys via **Wayland GlobalShortcuts Portal** (`ashpd`) and **X11** fallback;
+  - Global hotkeys via **Wayland GlobalShortcuts Portal** (`ashpd`), **X11**, or `/dev/input/event*` (`evdev` fallback when user is in the `input` group);
+  - System tray via `libayatana-appindicator3` / `libappindicator3` (gracefully opens the main window without tray if absent);
   - Autostart via `~/.config/autostart/ikoch.desktop`;
   - Clipboard file copy via `wl-copy` (Wayland) / `xclip` (X11);
   - File manager reveal via D-Bus (`org.freedesktop.FileManager1`) / `xdg-open`.
@@ -93,7 +96,7 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
      ```bash
      sudo apt update
      sudo apt install -y \
-       libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev \
+       libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev \
        libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
        gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
        libpipewire-0.3-dev libpulse-dev libasound2-dev libxdo-dev ffmpeg
@@ -101,9 +104,13 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
    - **Arch / CachyOS:**
      ```bash
      sudo pacman -S --needed \
-       webkit2gtk-4.1 libappindicator-gtk3 librsvg openssl patchelf \
+       webkit2gtk-4.1 libayatana-appindicator librsvg openssl patchelf \
        gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav \
        pipewire libpulse alsa-lib xdotool ffmpeg
+     ```
+   - *(Optional for best Wayland performance)* install `gpu-screen-recorder` and add your user to the `input` group for `evdev` global hotkeys:
+     ```bash
+     sudo usermod -aG input "$USER"
      ```
 3. Copy or symlink `ffmpeg` and `ffprobe` into `src-tauri/binaries/`:
    ```bash
