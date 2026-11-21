@@ -101,7 +101,7 @@ gstreamer-app = "0.23"
 gstreamer-video = "0.23"
 libpulse-binding = "2.28"
 x11rb = "0.13"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 futures-util = "0.3"
 
 # Internal workspace crates

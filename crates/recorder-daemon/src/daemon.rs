@@ -1892,6 +1892,7 @@ mod tests {
         assert!(video_pipeline_needs_restart(&base, &changed_hdr));
     }
 
+    #[cfg(windows)]
     #[test]
     fn hw_encode_2mbps_vbr_dynamic_motion_respects_bitrate_budget(
     ) -> Result<(), Box<dyn std::error::Error>> {

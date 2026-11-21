@@ -52,7 +52,9 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
 
 ### 🛠 Build from Source
 1. Install **Rust (1.82+)** and **Node.js (20+)**.
-2. Place `ffmpeg-x86_64-pc-windows-msvc.exe` and `ffprobe-x86_64-pc-windows-msvc.exe` into `src-tauri/binaries/` (excluded from Git due to GitHub's 100 MiB file limit).
+2. Place FFmpeg sidecars into `src-tauri/binaries/` (excluded from Git due to GitHub's 100 MiB file limit):
+   - **Windows:** `ffmpeg-x86_64-pc-windows-msvc.exe` and `ffprobe-x86_64-pc-windows-msvc.exe`
+   - **Linux:** static `ffmpeg-x86_64-unknown-linux-gnu` and `ffprobe-x86_64-unknown-linux-gnu` (or symlink system binaries: `ln -sf /usr/bin/ffmpeg src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu && ln -sf /usr/bin/ffprobe src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu`)
 3. Run:
    ```powershell
    npm install
@@ -97,7 +99,9 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
 
 ### 🛠 Сборка из исходников
 1. Установите **Rust (1.82+)** и **Node.js (20+)**.
-2. Поместите `ffmpeg-x86_64-pc-windows-msvc.exe` и `ffprobe-x86_64-pc-windows-msvc.exe` в `src-tauri/binaries/` (исключены из Git из-за лимита GitHub в 100 МБ).
+2. Поместите бинарники FFmpeg в `src-tauri/binaries/` (исключены из Git из-за лимита GitHub в 100 МБ):
+   - **Windows:** `ffmpeg-x86_64-pc-windows-msvc.exe` и `ffprobe-x86_64-pc-windows-msvc.exe`
+   - **Linux:** статические `ffmpeg-x86_64-unknown-linux-gnu` и `ffprobe-x86_64-unknown-linux-gnu` (или симлинки на системные: `ln -sf /usr/bin/ffmpeg src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu && ln -sf /usr/bin/ffprobe src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu`)
 3. Выполните:
    ```powershell
    npm install
