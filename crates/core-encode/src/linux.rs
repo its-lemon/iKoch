@@ -54,85 +54,88 @@ fn has_gst_element(name: &str) -> bool {
     gst::ElementFactory::find(name).is_some()
 }
 
-fn select_encoder_stage(cfg: &MfVideoEncoderConfig) -> (&'static str, String) {
+fn select_encoder_stage(cfg: &MfVideoEncoderConfig) -> Result<(&'static str, String), EncodeError> {
     let gop_frames = (cfg.fps.max(1) * cfg.gop_seconds.clamp(1, 5)).max(15);
     let kbps = cfg.bitrate_kbps.clamp(500, 120_000);
 
     match cfg.codec {
         VideoCodec::H264 => {
             if has_gst_element("nvh264enc") {
-                return (
+                return Ok((
                     "nvh264enc",
                     format!(
                         "nvh264enc bitrate={kbps} gop-size={gop_frames} rc-mode=vbr preset=low-latency-hq zerolatency=true ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=au"
                     ),
-                );
+                ));
             }
             if has_gst_element("vaapih264enc") {
-                return (
+                return Ok((
                     "vaapih264enc",
                     format!(
                         "vaapih264enc bitrate={kbps} keyframe-period={gop_frames} rate-control=vbr ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=au"
                     ),
-                );
+                ));
             }
-            (
+            Ok((
                 "x264enc",
                 format!(
                     "x264enc bitrate={kbps} key-int-max={gop_frames} tune=zerolatency speed-preset=veryfast ! h264parse config-interval=1 ! video/x-h264,stream-format=byte-stream,alignment=au"
                 ),
-            )
+            ))
         }
         VideoCodec::Hevc => {
             if has_gst_element("nvh265enc") {
-                return (
+                return Ok((
                     "nvh265enc",
                     format!(
                         "nvh265enc bitrate={kbps} gop-size={gop_frames} rc-mode=vbr preset=low-latency-hq zerolatency=true ! h265parse config-interval=1 ! video/x-h265,stream-format=byte-stream,alignment=au"
                     ),
-                );
+                ));
             }
             if has_gst_element("vaapih265enc") {
-                return (
+                return Ok((
                     "vaapih265enc",
                     format!(
                         "vaapih265enc bitrate={kbps} keyframe-period={gop_frames} rate-control=vbr ! h265parse config-interval=1 ! video/x-h265,stream-format=byte-stream,alignment=au"
                     ),
-                );
+                ));
             }
-            (
+            Ok((
                 "x265enc",
                 format!(
                     "x265enc bitrate={kbps} key-int-max={gop_frames} tune=zerolatency speed-preset=veryfast ! h265parse config-interval=1 ! video/x-h265,stream-format=byte-stream,alignment=au"
                 ),
-            )
+            ))
         }
+        VideoCodec::Av1 => Err(EncodeError::HardwareEncoderUnavailable {
+            codec: "AV1".to_string(),
+        }),
     }
 }
 
 impl MfHardwareEncoder {
     /// Initializes a GStreamer hardware/software video encoder matching `config`.
     pub fn new(_device: &(), config: MfVideoEncoderConfig) -> Result<Self, EncodeError> {
-        gst::init().map_err(|e| EncodeError::EncoderInitFailed(format!("GStreamer init: {e}")))?;
+        gst::init().map_err(|e| EncodeError::MftFailure(format!("GStreamer init: {e}")))?;
 
-        let (enc_name, enc_stage) = select_encoder_stage(&config);
+        let (enc_name, enc_stage) = select_encoder_stage(&config)?;
         let pipeline_str = format!(
             "appsrc name=src is-live=true format=time block=false ! videoconvert ! {enc_stage} ! appsink name=sink emit-signals=false sync=false max-buffers=8 drop=false"
         );
         let el = gst::parse::launch(&pipeline_str)
-            .map_err(|e| EncodeError::EncoderInitFailed(format!("GStreamer parse failed: {e}")))?;
+            .map_err(|e| EncodeError::MftFailure(format!("GStreamer parse failed: {e}")))?;
         let pipeline = el
             .downcast::<gst::Pipeline>()
-            .map_err(|_| EncodeError::EncoderInitFailed("Element is not Pipeline".to_string()))?;
+            .map_err(|_| EncodeError::MftFailure("Element is not Pipeline".to_string()))?;
 
         let appsrc = pipeline
             .by_name("src")
             .and_then(|e| e.downcast::<gst_app::AppSrc>().ok())
-            .ok_or_else(|| EncodeError::EncoderInitFailed("Missing appsrc".to_string()))?;
+            .ok_or_else(|| EncodeError::MftFailure("Missing appsrc".to_string()))?;
         let appsink = pipeline
             .by_name("sink")
             .and_then(|e| e.downcast::<gst_app::AppSink>().ok())
-            .ok_or_else(|| EncodeError::EncoderInitFailed("Missing appsink".to_string()))?;
+            .ok_or_else(|| EncodeError::MftFailure("Missing appsink".to_string()))?;
 
         let vinfo = gst_video::VideoInfo::builder(
             gst_video::VideoFormat::Nv12,
@@ -141,15 +144,15 @@ impl MfHardwareEncoder {
         )
         .fps(gst::Fraction::new(config.fps.max(1) as i32, 1))
         .build()
-        .map_err(|e| EncodeError::EncoderInitFailed(format!("VideoInfo failed: {e}")))?;
+        .map_err(|e| EncodeError::InvalidMediaType(format!("VideoInfo failed: {e}")))?;
         let caps = vinfo
             .to_caps()
-            .map_err(|e| EncodeError::EncoderInitFailed(format!("VideoInfo caps failed: {e}")))?;
+            .map_err(|e| EncodeError::InvalidMediaType(format!("VideoInfo caps failed: {e}")))?;
         appsrc.set_caps(Some(&caps));
 
         pipeline
             .set_state(gst::State::Playing)
-            .map_err(|e| EncodeError::EncoderInitFailed(format!("Pipeline start failed: {e}")))?;
+            .map_err(|e| EncodeError::MftFailure(format!("Pipeline start failed: {e}")))?;
 
         info!(
             "Linux GStreamer encoder '{}' started ({:?}, {}x{} @ {} fps, {} kbps)",

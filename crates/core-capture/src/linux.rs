@@ -1,7 +1,8 @@
 //! Linux screen/window capture via `ashpd` (`xdg-desktop-portal` ScreenCast + PipeWire)
 //! and GStreamer `pipewiresrc` outputting NV12 frames, with `x11rb` / `/proc` enumeration.
 
-use ashpd::desktop::screencast::{CursorMode, PersistMode, Screencast, SourceType};
+use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
+use ashpd::desktop::PersistMode;
 use core_types::{
     CaptureError, CaptureTarget, GpuFrameDescriptor, HdrMode, MonitorInfo, MonotonicClock,
     PixelFormat, ResolutionPreset, WindowInfo, VIDEO_FRAME_CHANNEL_CAPACITY,
@@ -126,25 +127,29 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>, CaptureError> {
         let setup = conn.setup();
         if let Some(screen) = setup.roots.get(screen_num) {
             return Ok(vec![MonitorInfo {
-                index: 0,
+                monitor_id: "DISPLAY-0".to_string(),
                 name: format!(
                     "Primary Display ({}x{})",
                     screen.width_in_pixels, screen.height_in_pixels
                 ),
-                device_name: "DISPLAY-0".to_string(),
+                hmonitor: 0,
                 width: u32::from(screen.width_in_pixels),
                 height: u32::from(screen.height_in_pixels),
+                x: 0,
+                y: 0,
                 is_primary: true,
             }]);
         }
     }
 
     Ok(vec![MonitorInfo {
-        index: 0,
+        monitor_id: "wayland-0".to_string(),
         name: "Primary Display (Wayland Portal)".to_string(),
-        device_name: "wayland-0".to_string(),
+        hmonitor: 0,
         width: 1920,
         height: 1080,
+        x: 0,
+        y: 0,
         is_primary: true,
     }])
 }
@@ -233,12 +238,13 @@ pub fn enumerate_windows() -> Result<Vec<WindowInfo>, CaptureError> {
         let (width, height) = geom.map_or((0, 0), |g| (u32::from(g.width), u32::from(g.height)));
 
         out.push(WindowInfo {
-            hwnd: u64::from(win),
+            hwnd: isize::try_from(win).unwrap_or(0),
             title,
             process_id: pid,
             process_name,
             width,
             height,
+            is_minimized: false,
         });
     }
     Ok(out)
@@ -376,19 +382,6 @@ fn open_portal_screencast(
     })
 }
 
-fn target_output_dimensions(src_w: u32, src_h: u32, preset: ResolutionPreset) -> (u32, u32) {
-    let target_h = match preset {
-        ResolutionPreset::Native => return (src_w & !1, src_h & !1),
-        ResolutionPreset::P1080 => 1080,
-        ResolutionPreset::P720 => 720,
-    };
-    if src_h <= target_h {
-        return (src_w & !1, src_h & !1);
-    }
-    let scaled_w = ((u64::from(src_w) * u64::from(target_h)) / u64::from(src_h.max(1))) as u32;
-    (scaled_w.max(2) & !1, target_h & !1)
-}
-
 fn run_linux_capture_loop(
     mut config: CaptureEngineConfig,
     clock: MonotonicClock,
@@ -412,8 +405,7 @@ fn run_linux_capture_loop(
             }
         };
 
-        let (out_w, out_h) =
-            target_output_dimensions(portal.width, portal.height, config.resolution);
+        let (out_w, out_h) = config.resolution.resolve(portal.width, portal.height);
         let pipeline_str = format!(
             "pipewiresrc fd={} path={} do-timestamp=true ! videoconvert ! videoscale ! video/x-raw,format=NV12,width={},height={},framerate={}/1 ! appsink name=sink emit-signals=false sync=false max-buffers=2 drop=true",
             portal.fd.as_raw_fd(),
@@ -517,12 +509,13 @@ fn run_linux_capture_loop(
                                 nv12_bytes: map.as_slice().to_vec(),
                                 stride,
                                 descriptor: GpuFrameDescriptor {
+                                    pts_us,
                                     width: w,
                                     height: h,
-                                    pixel_format: PixelFormat::Nv12,
-                                    pts_us,
-                                    sequence: frame_seq,
+                                    format: PixelFormat::Nv12,
+                                    is_hdr: false,
                                     adapter_luid: 0,
+                                    frame_number: frame_seq,
                                 },
                                 source_epoch: epoch,
                             };

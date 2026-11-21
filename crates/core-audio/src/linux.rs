@@ -196,8 +196,6 @@ pub fn enumerate_render_devices() -> Result<Vec<AudioDeviceInfo>, AudioError> {
             id: "default".to_string(),
             name: "Default PipeWire/PulseAudio Output".to_string(),
             is_default: true,
-            is_input: false,
-            is_active_loopback: true,
         }])
     } else {
         Ok(devs)
@@ -205,8 +203,20 @@ pub fn enumerate_render_devices() -> Result<Vec<AudioDeviceInfo>, AudioError> {
 }
 
 /// Enumerates PulseAudio/PipeWire render endpoints with activity flag.
-pub fn enumerate_render_devices_with_activity() -> Result<Vec<AudioDeviceInfo>, AudioError> {
-    enumerate_render_devices()
+pub fn enumerate_render_devices_with_activity(
+) -> Result<Vec<(AudioDeviceInfo, f32, String)>, AudioError> {
+    let devs = enumerate_render_devices()?;
+    Ok(devs
+        .into_iter()
+        .map(|d| {
+            let role = if d.is_default {
+                "Default".to_string()
+            } else {
+                String::new()
+            };
+            (d, 0.0, role)
+        })
+        .collect())
 }
 
 /// Enumerates PulseAudio/PipeWire microphone capture endpoints.
@@ -217,8 +227,6 @@ pub fn enumerate_capture_devices() -> Result<Vec<AudioDeviceInfo>, AudioError> {
             id: "default".to_string(),
             name: "Default Microphone (PipeWire/PulseAudio)".to_string(),
             is_default: true,
-            is_input: true,
-            is_active_loopback: false,
         }])
     } else {
         Ok(devs)
@@ -282,8 +290,6 @@ fn enumerate_pulse_devices(want_monitors: bool) -> Vec<AudioDeviceInfo> {
                         id,
                         name,
                         is_default: is_first,
-                        is_input: !want_monitors,
-                        is_active_loopback: want_monitors,
                     });
                 }
             }

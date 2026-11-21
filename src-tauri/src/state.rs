@@ -107,11 +107,19 @@ impl AppState {
     }
 }
 
-/// Resolves the canonical path for persisted user settings (`%APPDATA%/iKoch/settings.json`).
+/// Resolves the canonical path for persisted user settings (`%APPDATA%/iKoch/settings.json` on Windows,
+/// `~/.config/iKoch/settings.json` on Linux).
 #[must_use]
 pub fn resolve_settings_path() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
         PathBuf::from(appdata).join("iKoch").join("settings.json")
+    } else if let Ok(xdg_cfg) = std::env::var("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg_cfg).join("iKoch").join("settings.json")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home)
+            .join(".config")
+            .join("iKoch")
+            .join("settings.json")
     } else {
         PathBuf::from("iKoch").join("settings.json")
     }
@@ -164,8 +172,20 @@ pub fn load_or_init_settings(settings_path: &Path) -> AppSettings {
     // Resolve default relative output_dir to user's Videos folder so desktop shortcuts & Program Files launches work.
     if settings.storage.output_dir.is_relative() {
         let base = std::env::var("USERPROFILE")
+            .ok()
             .map(|home| PathBuf::from(home).join("Videos"))
-            .unwrap_or_else(|_| PathBuf::from("."));
+            .or_else(|| {
+                std::env::var("XDG_VIDEOS_DIR")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(PathBuf::from)
+            })
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|home| PathBuf::from(home).join("Videos"))
+            })
+            .unwrap_or_else(|| PathBuf::from("."));
         settings.storage.output_dir = base.join(&settings.storage.output_dir);
     }
 

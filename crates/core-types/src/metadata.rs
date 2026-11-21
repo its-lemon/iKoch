@@ -93,6 +93,18 @@ pub fn ikoch_cache_root_dir() -> PathBuf {
             return PathBuf::from(trimmed).join("iKoch").join("cache");
         }
     }
+    if let Ok(xdg_cache) = std::env::var("XDG_CACHE_HOME") {
+        let trimmed = xdg_cache.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed).join("iKoch").join("cache");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed).join(".cache").join("iKoch").join("cache");
+        }
+    }
     std::env::temp_dir().join("iKoch").join("cache")
 }
 
