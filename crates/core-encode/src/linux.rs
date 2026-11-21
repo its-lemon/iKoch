@@ -47,7 +47,6 @@ pub struct MfHardwareEncoder {
     header_emitted: bool,
     sequence: u64,
     first_pts_us: Option<i64>,
-    last_pts_us: Option<i64>,
 }
 
 fn has_gst_element(name: &str) -> bool {
@@ -170,7 +169,6 @@ impl MfHardwareEncoder {
             header_emitted: false,
             sequence: 0,
             first_pts_us: None,
-            last_pts_us: None,
         })
     }
 
@@ -266,7 +264,6 @@ impl MfHardwareEncoder {
                 .map_or(1_000_000 / self.config.fps.max(1), |d| {
                     (d.nseconds() / 1000) as u32
                 });
-            let _ = self.last_pts_us.replace(pts_us);
             self.sequence = self.sequence.saturating_add(1);
 
             out.push(EncoderOutput::Packet(MediaPacket::new(

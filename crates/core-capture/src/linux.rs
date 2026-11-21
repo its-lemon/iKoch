@@ -7,7 +7,7 @@ use core_types::{
     CaptureError, CaptureTarget, GpuFrameDescriptor, HdrMode, MonitorInfo, MonotonicClock,
     PixelFormat, ResolutionPreset, WindowInfo, VIDEO_FRAME_CHANNEL_CAPACITY,
 };
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -467,28 +467,23 @@ fn run_linux_capture_loop(
         let mut restart_needed = false;
 
         while !stop_flag.load(Ordering::Relaxed) && !restart_needed {
-            loop {
-                match cmd_rx.try_recv() {
-                    Ok(CaptureControlCommand::Stop) => {
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                match cmd {
+                    CaptureControlCommand::Stop => {
                         let _ = pipeline.set_state(gst::State::Null);
                         return;
                     }
-                    Ok(CaptureControlCommand::SwitchTarget(new_t)) => {
+                    CaptureControlCommand::SwitchTarget(new_t) => {
                         current_target = new_t;
                         epoch = epoch.saturating_add(1);
                         restart_needed = true;
                         break;
                     }
-                    Ok(CaptureControlCommand::SetResolution(new_res)) => {
+                    CaptureControlCommand::SetResolution(new_res) => {
                         config.resolution = new_res;
                         epoch = epoch.saturating_add(1);
                         restart_needed = true;
                         break;
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        let _ = pipeline.set_state(gst::State::Null);
-                        return;
                     }
                 }
             }

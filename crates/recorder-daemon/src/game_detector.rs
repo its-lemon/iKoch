@@ -423,10 +423,10 @@ fn probe_foreground_game(cfg: &GameDetectionConfig) -> Option<DetectedGameInfo> 
     if let Ok((conn, screen_num)) = x11rb::connect(None) {
         if let Some(screen) = conn.setup().roots.get(screen_num) {
             if let (Ok(a_act), Ok(a_pid), Ok(a_name), Ok(a_utf8)) = (
-                conn.intern_atom(false, b"_NET_ACTIVE_WINDOW").and_then(|c| Ok(c.reply())),
-                conn.intern_atom(false, b"_NET_WM_PID").and_then(|c| Ok(c.reply())),
-                conn.intern_atom(false, b"_NET_WM_NAME").and_then(|c| Ok(c.reply())),
-                conn.intern_atom(false, b"UTF8_STRING").and_then(|c| Ok(c.reply())),
+                conn.intern_atom(false, b"_NET_ACTIVE_WINDOW").map(|c| c.reply()),
+                conn.intern_atom(false, b"_NET_WM_PID").map(|c| c.reply()),
+                conn.intern_atom(false, b"_NET_WM_NAME").map(|c| c.reply()),
+                conn.intern_atom(false, b"UTF8_STRING").map(|c| c.reply()),
             ) {
                 if let (Ok(a_act), Ok(a_pid), Ok(a_name), Ok(a_utf8)) =
                     (a_act, a_pid, a_name, a_utf8)

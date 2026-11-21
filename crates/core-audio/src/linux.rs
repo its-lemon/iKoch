@@ -172,8 +172,6 @@ pub fn verify_mp4_audio_with_mf_source_reader(path: &Path) -> Result<MfAudioVeri
                     decoded_frames += bytes.len() / 4;
                 }
             }
-        } else if sink.is_eos() {
-            break;
         } else {
             break;
         }
