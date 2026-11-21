@@ -313,6 +313,7 @@ impl Default for GameDetectionConfig {
             ],
             #[cfg(not(windows))]
             blacklist_exes: vec![
+                "explorer".to_string(),
                 "ikoch".to_string(),
                 "chrome".to_string(),
                 "chromium".to_string(),

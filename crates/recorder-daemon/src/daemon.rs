@@ -398,6 +398,8 @@ struct DaemonRuntime {
     active_session: Option<ActiveSessionTracker>,
     recent_replay_markers: VecDeque<StampedReplayMarker>,
     video_capture: Option<ActiveVideoCapture>,
+    #[cfg(target_os = "linux")]
+    gsr: Option<crate::gsr_linux::GsrBackend>,
     audio: Option<AudioPipelineHandle>,
     audio_bridge_stop: Arc<AtomicBool>,
     audio_bridge_thread: Option<JoinHandle<()>>,
@@ -494,6 +496,23 @@ impl DaemonRuntime {
 
     fn reconcile_capture_state(&mut self) {
         let desired = self.desired_capture_target();
+        #[cfg(target_os = "linux")]
+        if let Some(gsr) = self.gsr.as_mut() {
+            match desired.clone() {
+                None => {
+                    gsr.stop_replay();
+                    return;
+                }
+                Some(target) => {
+                    if let Err(err) = gsr.ensure_replay_running(&target, &self.settings) {
+                        warn!("gpu-screen-recorder start failed ({err}); falling back to ashpd + GStreamer");
+                        self.gsr = None;
+                    } else {
+                        return;
+                    }
+                }
+            }
+        }
         match (desired, self.video_capture.is_some()) {
             (None, true) => {
                 if let Some(cap) = self.video_capture.take() {
@@ -535,6 +554,13 @@ impl DaemonRuntime {
         let _ = self.evt_tx.try_send(RecorderEvent::CaptureTargetChanged {
             target: new_target.clone(),
         });
+
+        #[cfg(target_os = "linux")]
+        if let Some(gsr) = self.gsr.as_mut() {
+            gsr.stop_replay();
+            self.reconcile_capture_state();
+            return;
+        }
 
         match (&new_target, self.desired_capture_target(), self.video_capture.as_ref()) {
             (_, Some(resolved), Some(cap)) => {
@@ -693,6 +719,39 @@ impl DaemonRuntime {
         let (game_name, title_base, exe_name) = self.current_game_labels();
         let path = build_output_mp4_path(&self.settings.storage.output_dir, &game_name, "clip");
 
+        #[cfg(target_os = "linux")]
+        if let Some(gsr) = self.gsr.as_mut() {
+            let fallback_dur = f64::from(self.settings.replay_buffer.duration_secs);
+            match gsr.save_replay_clip(&path, fallback_dur) {
+                Ok((saved_path, duration_sec, bytes_written)) => {
+                    let now = Utc::now();
+                    let meta = self.build_clip_metadata(
+                        RecordingKind::Clip,
+                        &game_name,
+                        &title_base,
+                        exe_name,
+                        saved_path,
+                        duration_sec,
+                        bytes_written,
+                        Vec::new(),
+                        now,
+                    );
+                    if let Err(err) = save_clip_metadata(&meta) {
+                        warn!("Failed to write clip sidecar JSON: {err}");
+                    }
+                    self.play_sound(SoundNotificationKind::ClipSaved);
+                    let _ = self
+                        .evt_tx
+                        .try_send(RecorderEvent::ClipSaved(Box::new(meta)));
+                    self.enforce_storage_quota();
+                }
+                Err(err) => {
+                    warn!("gpu-screen-recorder SaveReplayClip failed: {err}");
+                }
+            }
+            return;
+        }
+
         match self.router.save_replay_clip(&path) {
             Ok(summary) => {
                 let (game_peak_dbfs, mic_peak_dbfs, output_device_name) =
@@ -832,6 +891,37 @@ impl DaemonRuntime {
         let (game_name, _, _) = self.current_game_labels();
         let path = build_output_mp4_path(&self.settings.storage.output_dir, &game_name, "session");
 
+        #[cfg(target_os = "linux")]
+        if let Some(gsr) = self.gsr.as_mut() {
+            let target = self
+                .desired_capture_target()
+                .unwrap_or_else(|| self.settings.capture.target.clone());
+            match gsr.start_session(&path, &target, &self.settings) {
+                Ok(()) => {
+                    self.pending_session_start = false;
+                    let now = Utc::now();
+                    let info = ActiveSessionInfo {
+                        session_id: Uuid::new_v4(),
+                        started_at: now,
+                        elapsed_sec: 0.0,
+                        output_path: path.clone(),
+                        markers_count: 0,
+                        bytes_written: 0,
+                    };
+                    self.active_session = Some(ActiveSessionTracker {
+                        info: info.clone(),
+                        started_utc: now,
+                        markers: Vec::new(),
+                    });
+                    self.play_sound(SoundNotificationKind::RecordingStarted);
+                    let _ = self.evt_tx.try_send(RecorderEvent::SessionStarted(info));
+                    self.publish_state_snapshot();
+                }
+                Err(err) => warn!("gpu-screen-recorder StartSession failed: {err}"),
+            }
+            return;
+        }
+
         match self.router.start_session(&path) {
             Ok(()) => {
                 self.pending_session_start = false;
@@ -896,6 +986,37 @@ impl DaemonRuntime {
         let Some(tracker) = self.active_session.take() else {
             return;
         };
+        #[cfg(target_os = "linux")]
+        if let Some(gsr) = self.gsr.as_mut() {
+            match gsr.stop_session() {
+                Ok((saved_path, duration_sec, bytes_written)) => {
+                    let (game_name, title_base, exe_name) = self.current_game_labels();
+                    let meta = self.build_clip_metadata(
+                        RecordingKind::Session,
+                        &game_name,
+                        &title_base,
+                        exe_name,
+                        saved_path,
+                        duration_sec,
+                        bytes_written,
+                        tracker.markers,
+                        Utc::now(),
+                    );
+                    if let Err(err) = save_clip_metadata(&meta) {
+                        warn!("Failed to write session sidecar JSON: {err}");
+                    }
+                    self.play_sound(SoundNotificationKind::RecordingStopped);
+                    let _ = self
+                        .evt_tx
+                        .try_send(RecorderEvent::SessionStopped(Box::new(meta)));
+                    self.enforce_storage_quota();
+                }
+                Err(err) => warn!("gpu-screen-recorder StopSession failed: {err}"),
+            }
+            self.reconcile_capture_state();
+            self.publish_state_snapshot();
+            return;
+        }
         let remux = self.settings.storage.auto_remux_fmp4;
         match self.router.stop_session(remux) {
             Ok(summary) => {
@@ -1385,9 +1506,17 @@ impl DaemonRuntime {
 
     fn publish_state_snapshot(&self) {
         let (fill_sec, buf_bytes, _, dropped_disk, _) = self.router.stats();
+        #[cfg(target_os = "linux")]
+        let gsr_buffering = !self.privacy_mode
+            && self
+                .gsr
+                .as_ref()
+                .is_some_and(crate::gsr_linux::GsrBackend::is_replay_active);
+        #[cfg(not(target_os = "linux"))]
+        let gsr_buffering = false;
         let tray_state = if self.active_session.is_some() {
             TrayIndicatorState::Recording
-        } else if !self.privacy_mode && self.video_capture.is_some() {
+        } else if !self.privacy_mode && (self.video_capture.is_some() || gsr_buffering) {
             TrayIndicatorState::Buffering
         } else {
             TrayIndicatorState::Idle
@@ -1479,6 +1608,17 @@ fn run_coordinator_loop(
     let buffering_default = !matches!(initial_settings.capture.target, CaptureTarget::AutoGame)
         || initial_settings.replay_buffer.enabled;
 
+    #[cfg(target_os = "linux")]
+    let gsr = if crate::gsr_linux::is_gpu_screen_recorder_available() {
+        info!("Vice-style gpu-screen-recorder detected in PATH; using as priority Linux capture backend");
+        Some(crate::gsr_linux::GsrBackend::new(
+            &initial_settings.storage.temp_dir,
+        ))
+    } else {
+        info!("gpu-screen-recorder not found in PATH; using ashpd + GStreamer pipeline");
+        None
+    };
+
     let mut rt = DaemonRuntime {
         game_detector: GameDetector::new(initial_settings.capture.games.clone()),
         settings: initial_settings,
@@ -1502,6 +1642,8 @@ fn run_coordinator_loop(
         active_session: None,
         recent_replay_markers: VecDeque::new(),
         video_capture: None,
+        #[cfg(target_os = "linux")]
+        gsr,
         audio: None,
         audio_bridge_stop: Arc::new(AtomicBool::new(false)),
         audio_bridge_thread: None,

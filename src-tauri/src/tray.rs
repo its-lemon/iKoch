@@ -45,9 +45,55 @@ pub struct TrayController {
     dynamic_targets: Arc<Mutex<HashMap<String, CaptureTarget>>>,
 }
 
+#[cfg(target_os = "linux")]
+fn is_appindicator_available() -> bool {
+    const LIBS: &[&str] = &["libayatana-appindicator3.so.1", "libappindicator3.so.1"];
+    let mut search_dirs: Vec<std::path::PathBuf> = [
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/lib",
+        "/lib64",
+        "/lib/x86_64-linux-gnu",
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .collect();
+
+    if let Ok(ld_paths) = std::env::var("LD_LIBRARY_PATH") {
+        search_dirs.extend(std::env::split_paths(&ld_paths));
+    }
+
+    for dir in search_dirs {
+        for lib in LIBS {
+            if dir.join(lib).exists() {
+                return true;
+            }
+        }
+    }
+
+    if let Ok(out) = std::process::Command::new("ldconfig").arg("-p").output() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if LIBS.iter().any(|lib| stdout.contains(lib)) {
+            return true;
+        }
+    }
+
+    false
+}
+
 impl TrayController {
     /// Initializes the system tray icon and dynamic context menu on `app`.
     pub fn setup(app: &AppHandle) -> Result<Self, String> {
+        #[cfg(target_os = "linux")]
+        if !is_appindicator_available() {
+            return Err(
+                "libayatana-appindicator3.so.1 / libappindicator3.so.1 not found; running without system tray"
+                    .to_string(),
+            );
+        }
+
         let lang = app
             .try_state::<AppState>()
             .map_or(AppLanguage::Ru, |s| s.current_settings().language);

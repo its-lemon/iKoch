@@ -6,6 +6,8 @@
 
 pub mod daemon;
 pub mod game_detector;
+#[cfg(target_os = "linux")]
+pub mod gsr_linux;
 pub mod hotkeys;
 pub mod sounds;
 pub mod storage;

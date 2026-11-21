@@ -124,6 +124,13 @@ fn run_hotkey_loop(
         }
     };
 
+    #[cfg(target_os = "linux")]
+    let _evdev_guard = if std::env::var_os("WAYLAND_DISPLAY").is_some() || manager.is_none() {
+        spawn_linux_evdev_fallback(&initial, action_tx.clone(), Arc::clone(&stop_flag))
+    } else {
+        None
+    };
+
     let mut registered: HashMap<u32, (HotKey, HotkeyAction)> = HashMap::new();
     if let Some(mgr) = manager.as_ref() {
         apply_bindings(mgr, &initial, &mut registered);
@@ -256,6 +263,170 @@ fn spawn_linux_portal_shortcuts(
         .ok()
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EvdevBinding {
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    code: u16,
+}
+
+#[allow(dead_code)]
+fn parse_evdev_binding(raw: &str) -> Option<EvdevBinding> {
+    let mut ctrl = false;
+    let mut shift = false;
+    let mut alt = false;
+    let mut key_code = None;
+
+    for part in raw.split('+').map(|s| s.trim().to_ascii_lowercase()) {
+        match part.as_str() {
+            "ctrl" | "control" => ctrl = true,
+            "shift" => shift = true,
+            "alt" => alt = true,
+            "f1" => key_code = Some(59),
+            "f2" => key_code = Some(60),
+            "f3" => key_code = Some(61),
+            "f4" => key_code = Some(62),
+            "f5" => key_code = Some(63),
+            "f6" => key_code = Some(64),
+            "f7" => key_code = Some(65),
+            "f8" => key_code = Some(66),
+            "f9" => key_code = Some(67),
+            "f10" => key_code = Some(68),
+            "f11" => key_code = Some(87),
+            "f12" => key_code = Some(88),
+            "p" => key_code = Some(25),
+            "m" => key_code = Some(50),
+            "r" => key_code = Some(19),
+            "s" => key_code = Some(31),
+            "b" => key_code = Some(48),
+            "insert" => key_code = Some(110),
+            "delete" => key_code = Some(111),
+            "space" => key_code = Some(57),
+            _ => return None,
+        }
+    }
+    key_code.map(|code| EvdevBinding {
+        ctrl,
+        shift,
+        alt,
+        code,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_linux_evdev_fallback(
+    initial: &HotkeySettings,
+    action_tx: Sender<HotkeyAction>,
+    stop_flag: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    use std::fs::{self, OpenOptions};
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    const O_NONBLOCK: i32 = 0o4000;
+    const EV_KEY: u16 = 1;
+    const KEY_LEFTCTRL: u16 = 29;
+    const KEY_RIGHTCTRL: u16 = 97;
+    const KEY_LEFTSHIFT: u16 = 42;
+    const KEY_RIGHTSHIFT: u16 = 54;
+    const KEY_LEFTALT: u16 = 56;
+    const KEY_RIGHTALT: u16 = 100;
+
+    let bindings: Vec<(EvdevBinding, HotkeyAction)> = [
+        (&initial.save_clip, HotkeyAction::SaveClip),
+        (&initial.toggle_session, HotkeyAction::ToggleSession),
+        (&initial.add_bookmark, HotkeyAction::AddBookmark),
+        (&initial.toggle_mic_mute, HotkeyAction::ToggleMicMute),
+        (&initial.toggle_privacy_mode, HotkeyAction::TogglePrivacyMode),
+    ]
+    .into_iter()
+    .filter_map(|(s, act)| parse_evdev_binding(s).map(|b| (b, act)))
+    .collect();
+
+    if bindings.is_empty() {
+        return None;
+    }
+
+    thread::Builder::new()
+        .name("ikoch-linux-evdev-hotkeys".to_string())
+        .spawn(move || {
+            let Ok(entries) = fs::read_dir("/dev/input") else {
+                return;
+            };
+            let mut files = Vec::new();
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_event = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("event"));
+                if !is_event {
+                    continue;
+                }
+                if let Ok(f) = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(O_NONBLOCK)
+                    .open(&path)
+                {
+                    files.push(f);
+                }
+            }
+
+            if files.is_empty() {
+                info!(
+                    "Linux evdev hotkey fallback inactive (no read access to /dev/input/event*; \
+                     add user to 'input' group for global Wayland hotkeys if portal is unsupported)"
+                );
+                return;
+            }
+
+            info!(
+                "Linux evdev hotkey fallback listening on {} /dev/input/event* device(s)",
+                files.len()
+            );
+
+            let mut ctrl = false;
+            let mut shift = false;
+            let mut alt = false;
+            let mut buf = [0u8; 24];
+
+            while !stop_flag.load(Ordering::Relaxed) {
+                for f in &mut files {
+                    while f.read_exact(&mut buf).is_ok() {
+                        let ev_type = u16::from_ne_bytes([buf[16], buf[17]]);
+                        let code = u16::from_ne_bytes([buf[18], buf[19]]);
+                        let value = i32::from_ne_bytes([buf[20], buf[21], buf[22], buf[23]]);
+                        if ev_type != EV_KEY {
+                            continue;
+                        }
+                        let pressed = value != 0;
+                        match code {
+                            KEY_LEFTCTRL | KEY_RIGHTCTRL => ctrl = pressed,
+                            KEY_LEFTSHIFT | KEY_RIGHTSHIFT => shift = pressed,
+                            KEY_LEFTALT | KEY_RIGHTALT => alt = pressed,
+                            _ if value == 1 => {
+                                for (b, act) in &bindings {
+                                    if b.code == code
+                                        && b.ctrl == ctrl
+                                        && b.shift == shift
+                                        && b.alt == alt
+                                    {
+                                        let _ = action_tx.try_send(*act);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(15));
+            }
+        })
+        .ok()
+}
+
 fn unregister_all_map(
     manager: &GlobalHotKeyManager,
     registered: &mut HashMap<u32, (HotKey, HotkeyAction)>,
@@ -316,5 +487,28 @@ mod tests {
         assert_ne!(mute.id(), priv_hk.id());
         assert!(parse_hotkey_binding("").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn parse_evdev_binding_handles_modifiers_and_fn_keys() {
+        assert_eq!(
+            parse_evdev_binding("F9"),
+            Some(EvdevBinding {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                code: 67,
+            })
+        );
+        assert_eq!(
+            parse_evdev_binding("Ctrl+Shift+P"),
+            Some(EvdevBinding {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                code: 25,
+            })
+        );
+        assert!(parse_evdev_binding("").is_none());
     }
 }

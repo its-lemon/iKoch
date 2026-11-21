@@ -161,12 +161,21 @@ pub fn run() {
             }
             app.manage(state);
 
-            let tray = TrayController::setup(app.handle())?;
-            app.manage(tray.clone());
+            let tray = match TrayController::setup(app.handle()) {
+                Ok(t) => {
+                    app.manage(t.clone());
+                    Some(t)
+                }
+                Err(err) => {
+                    warn!("System tray unavailable ({err}); opening main window directly");
+                    None
+                }
+            };
+            let force_open_window = tray.is_none();
 
             spawn_event_dispatcher(app.handle().clone(), tray, evt_rx);
 
-            if !start_minimized {
+            if !start_minimized || force_open_window {
                 open_or_focus_main_window(app.handle(), None);
             }
             Ok(())
@@ -202,7 +211,7 @@ pub fn run() {
 
 fn spawn_event_dispatcher(
     app: AppHandle,
-    tray: TrayController,
+    tray: Option<TrayController>,
     evt_rx: Receiver<RecorderEvent>,
 ) {
     thread::Builder::new()
@@ -230,7 +239,9 @@ fn spawn_event_dispatcher(
                         );
                         if last_tray_sig.as_ref() != Some(&sig) {
                             last_tray_sig = Some(sig);
-                            tray.refresh_with_language(&app, snap, lang);
+                            if let Some(t) = &tray {
+                                t.refresh_with_language(&app, snap, lang);
+                            }
                         }
                     }
                     RecorderEvent::ClipSaved(meta) => {

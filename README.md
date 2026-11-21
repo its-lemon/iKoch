@@ -55,7 +55,10 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
 2. Place FFmpeg sidecars into `src-tauri/binaries/` (excluded from Git due to GitHub's 100 MiB file limit):
    - **Windows:** `ffmpeg-x86_64-pc-windows-msvc.exe` and `ffprobe-x86_64-pc-windows-msvc.exe`
    - **Linux:** static `ffmpeg-x86_64-unknown-linux-gnu` and `ffprobe-x86_64-unknown-linux-gnu` (or symlink system binaries: `ln -sf /usr/bin/ffmpeg src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu && ln -sf /usr/bin/ffprobe src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu`)
-3. Run:
+3. **Linux runtime notes (`linux` branch):**
+   - **Recommended:** install `gpu-screen-recorder` in `PATH` (Vice-style priority backend for maximum Wayland/X11 performance; falls back automatically to `ashpd` + GStreamer if absent).
+   - **Tray & Wayland Hotkeys:** install `libayatana-appindicator3` for system tray support (the app opens the main window without tray if missing), and optionally add your user to the `input` group for `/dev/input/event*` global hotkeys when the Wayland `GlobalShortcuts` portal is unavailable.
+4. Run:
    ```powershell
    npm install
    npx tauri build
