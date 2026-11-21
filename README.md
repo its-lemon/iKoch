@@ -105,7 +105,10 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
 2. Поместите бинарники FFmpeg в `src-tauri/binaries/` (исключены из Git из-за лимита GitHub в 100 МБ):
    - **Windows:** `ffmpeg-x86_64-pc-windows-msvc.exe` и `ffprobe-x86_64-pc-windows-msvc.exe`
    - **Linux:** статические `ffmpeg-x86_64-unknown-linux-gnu` и `ffprobe-x86_64-unknown-linux-gnu` (или симлинки на системные: `ln -sf /usr/bin/ffmpeg src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu && ln -sf /usr/bin/ffprobe src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu`)
-3. Выполните:
+3. **Примечания для Linux (ветка `linux`):**
+   - **Рекомендуется:** установите `gpu-screen-recorder` в `PATH` (приоритетный бэкенд по принципу Vice для максимальной производительности на Wayland/X11; без него автоматически используется встроенный `ashpd` + GStreamer).
+   - **Трей и хоткеи на Wayland:** установите `libayatana-appindicator3` для иконки в трее (если библиотеки нет — приложение откроет окно напрямую без трея), и при необходимости добавьте пользователя в группу `input` для работы глобальных хоткеев через `/dev/input/event*` (`evdev` fallback).
+4. Выполните:
    ```powershell
    npm install
    npx tauri build
