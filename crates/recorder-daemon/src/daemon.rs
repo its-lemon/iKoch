@@ -892,32 +892,39 @@ impl DaemonRuntime {
         let path = build_output_mp4_path(&self.settings.storage.output_dir, &game_name, "session");
 
         #[cfg(target_os = "linux")]
-        if let Some(gsr) = self.gsr.as_mut() {
+        if self.gsr.is_some() {
             let target = self
                 .desired_capture_target()
                 .unwrap_or_else(|| self.settings.capture.target.clone());
-            match gsr.start_session(&path, &target, &self.settings) {
-                Ok(()) => {
-                    self.pending_session_start = false;
-                    let now = Utc::now();
-                    let info = ActiveSessionInfo {
-                        session_id: Uuid::new_v4(),
-                        started_at: now,
-                        elapsed_sec: 0.0,
-                        output_path: path.clone(),
-                        markers_count: 0,
-                        bytes_written: 0,
-                    };
-                    self.active_session = Some(ActiveSessionTracker {
-                        info: info.clone(),
-                        started_utc: now,
-                        markers: Vec::new(),
-                    });
-                    self.play_sound(SoundNotificationKind::RecordingStarted);
-                    let _ = self.evt_tx.try_send(RecorderEvent::SessionStarted(info));
-                    self.publish_state_snapshot();
+            let settings = self.settings.clone();
+            let res = self
+                .gsr
+                .as_mut()
+                .map(|gsr| gsr.start_session(&path, &target, &settings));
+            if let Some(res) = res {
+                match res {
+                    Ok(()) => {
+                        self.pending_session_start = false;
+                        let now = Utc::now();
+                        let info = ActiveSessionInfo {
+                            session_id: Uuid::new_v4(),
+                            started_at: now,
+                            elapsed_sec: 0.0,
+                            output_path: path.clone(),
+                            markers_count: 0,
+                            bytes_written: 0,
+                        };
+                        self.active_session = Some(ActiveSessionTracker {
+                            info: info.clone(),
+                            started_utc: now,
+                            markers: Vec::new(),
+                        });
+                        self.play_sound(SoundNotificationKind::RecordingStarted);
+                        let _ = self.evt_tx.try_send(RecorderEvent::SessionStarted(info));
+                        self.publish_state_snapshot();
+                    }
+                    Err(err) => warn!("gpu-screen-recorder StartSession failed: {err}"),
                 }
-                Err(err) => warn!("gpu-screen-recorder StartSession failed: {err}"),
             }
             return;
         }

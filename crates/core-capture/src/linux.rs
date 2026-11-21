@@ -707,7 +707,6 @@ fn run_linux_capture_loop(
                 break;
             }
             if drain_gst_bus_errors(&pipeline) {
-                restart_needed = true;
                 break;
             }
 
