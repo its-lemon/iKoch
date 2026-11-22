@@ -10,6 +10,7 @@ import type {
   EditorCacheStats,
   FrameScreenshotRequest,
   GalleryFilter,
+  MergeClipsRequest,
   MonitorInfo,
   PreparedEditorMedia,
   RecorderCommand,
@@ -90,11 +91,20 @@ export const api = {
   fastTrimClip: (req: TrimRequest) =>
     invoke<string>("fast_trim_clip", { req }),
 
+  replaceClipFastTrim: (req: TrimRequest) =>
+    invoke<string>("replace_clip_fast_trim", { req }),
+
   compressClipForDiscord: (req: DiscordCompressRequest, durationSec: number) =>
     invoke<string>("compress_clip_for_discord", { req, durationSec }),
 
   exportAdvancedClip: (req: AdvancedExportRequest) =>
     invoke<string>("export_advanced_clip", { req }),
+
+  replaceClipAdvanced: (req: AdvancedExportRequest) =>
+    invoke<string>("replace_clip_advanced", { req }),
+
+  mergeClips: (req: MergeClipsRequest) =>
+    invoke<string>("merge_clips", { req }),
 
   copyClipToClipboard: (path: string) =>
     invoke<void>("copy_clip_to_clipboard", { path }),

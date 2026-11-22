@@ -371,53 +371,69 @@ fn handle_tray_menu_event(
     }
 }
 
-/// Renders a minimalist 32x32 RGBA ring + dot status badge icon reflecting the live daemon state.
+fn dist_seg_2d(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let (vx, vy) = (bx - ax, by - ay);
+    let (wx, wy) = (px - ax, py - ay);
+    let c1 = vx * wx + vy * wy;
+    if c1 <= 0.0 {
+        return (px - ax).hypot(py - ay);
+    }
+    let c2 = vx * vx + vy * vy;
+    if c2 <= c1 {
+        return (px - bx).hypot(py - by);
+    }
+    let b = c1 / c2;
+    (px - (ax + b * vx)).hypot(py - (ay + b * vy))
+}
+
+/// Renders a minimalist 32x32 RGBA rounded badge icon with a crisp `'K'` and status border.
 #[must_use]
 pub fn build_status_icon(status: TrayStatusKind) -> Image<'static> {
     const SIZE: usize = 32;
     let mut rgba = vec![0u8; SIZE * SIZE * 4];
 
-    let inner_rgb: [u8; 3] = match status {
+    let accent_rgb: [u8; 3] = match status {
         TrayStatusKind::Idle => [148, 163, 184],       // Cool steel
         TrayStatusKind::Buffering => [34, 197, 94],    // Neon emerald
         TrayStatusKind::Recording => [244, 63, 94],    // Neon crimson
         TrayStatusKind::PrivacyMode => [245, 158, 11], // Amber shield
     };
-    let outer_rgb: [u8; 3] = [18, 21, 30];
+    let bg_rgb: [u8; 3] = [15, 17, 26];
 
-    let center = (SIZE as f32 - 1.0) * 0.5;
     for y in 0..SIZE {
         for x in 0..SIZE {
-            let dx = x as f32 - center;
-            let dy = y as f32 - center;
-            let dist = (dx * dx + dy * dy).sqrt();
-            let idx = (y * SIZE + x) * 4;
-
-            if dist <= 5.2 {
-                // Core status dot
-                rgba[idx] = inner_rgb[0];
-                rgba[idx + 1] = inner_rgb[1];
-                rgba[idx + 2] = inner_rgb[2];
-                rgba[idx + 3] = 255;
-            } else if dist <= 10.0 {
-                // Dark graphite ring background
-                rgba[idx] = outer_rgb[0];
-                rgba[idx + 1] = outer_rgb[1];
-                rgba[idx + 2] = outer_rgb[2];
-                rgba[idx + 3] = 255;
-            } else if dist <= 13.4 {
-                // Minimalist neon status halo ring
-                rgba[idx] = inner_rgb[0];
-                rgba[idx + 1] = inner_rgb[1];
-                rgba[idx + 2] = inner_rgb[2];
-                rgba[idx + 3] = 255;
-            } else if dist <= 14.5 {
-                let alpha = ((14.5 - dist).clamp(0.0, 1.0) * 255.0) as u8;
-                rgba[idx] = inner_rgb[0];
-                rgba[idx + 1] = inner_rgb[1];
-                rgba[idx + 2] = inner_rgb[2];
-                rgba[idx + 3] = alpha;
+            let u = (x as f32 + 0.5) / SIZE as f32;
+            let v = (y as f32 + 0.5) / SIZE as f32;
+            let qx = (u - 0.5).abs() - (0.45 - 0.14);
+            let qy = (v - 0.5).abs() - (0.45 - 0.14);
+            let d_box = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - 0.14;
+            if d_box > 0.025 {
+                continue;
             }
+
+            let box_alpha = (1.0 - ((d_box + 0.015) / 0.04).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+            let border = (1.0 - ((d_box + 0.025).abs() / 0.045).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+
+            let stroke = 0.078;
+            let d_stem = dist_seg_2d(u, v, 0.30, 0.24, 0.30, 0.76) - stroke;
+            let d_up = dist_seg_2d(u, v, 0.35, 0.52, 0.68, 0.24) - stroke * 0.92;
+            let d_dn = dist_seg_2d(u, v, 0.43, 0.46, 0.69, 0.76) - stroke * 0.92;
+            let d_k = d_stem.min(d_up).min(d_dn);
+            let k_mask = (1.0 - ((d_k + 0.015) / 0.03).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+
+            let mut r = f32::from(bg_rgb[0]) * (1.0 - border) + f32::from(accent_rgb[0]) * border;
+            let mut g = f32::from(bg_rgb[1]) * (1.0 - border) + f32::from(accent_rgb[1]) * border;
+            let mut b = f32::from(bg_rgb[2]) * (1.0 - border) + f32::from(accent_rgb[2]) * border;
+
+            r = r * (1.0 - k_mask) + 248.0 * k_mask;
+            g = g * (1.0 - k_mask) + 250.0 * k_mask;
+            b = b * (1.0 - k_mask) + 255.0 * k_mask;
+
+            let idx = (y * SIZE + x) * 4;
+            rgba[idx] = r.clamp(0.0, 255.0) as u8;
+            rgba[idx + 1] = g.clamp(0.0, 255.0) as u8;
+            rgba[idx + 2] = b.clamp(0.0, 255.0) as u8;
+            rgba[idx + 3] = (box_alpha * 255.0).clamp(0.0, 255.0) as u8;
         }
     }
 

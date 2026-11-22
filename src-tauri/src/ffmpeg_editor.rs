@@ -970,6 +970,296 @@ fn mark_edited_sidecar(source_path: &Path, output_path: &Path, subclip_from_sess
     }
 }
 
+fn atomic_replace_and_refresh_sidecar(
+    source_mp4: &Path,
+    tmp_mp4: &Path,
+    editor_cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    if !tmp_mp4.is_file() {
+        return Err("Temporary export file was not created".to_string());
+    }
+
+    let mut replaced = false;
+    let mut last_err = String::new();
+    for _ in 0..8 {
+        if let Err(e) = fs::rename(tmp_mp4, source_mp4) {
+            last_err = e.to_string();
+            // On Windows, fs::rename may fail if destination exists and is briefly locked; try remove+rename.
+            if source_mp4.exists()
+                && fs::remove_file(source_mp4).is_ok()
+                && fs::rename(tmp_mp4, source_mp4).is_ok()
+            {
+                replaced = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(140));
+        } else {
+            replaced = true;
+            break;
+        }
+    }
+
+    if !replaced {
+        let _ = fs::remove_file(tmp_mp4);
+        return Err(format!(
+            "Could not replace '{}' (file may be in use): {last_err}",
+            source_mp4.display()
+        ));
+    }
+
+    // Clear stale editor cache stems/thumbnails for the replaced clip.
+    if let Ok(entries) = fs::read_dir(editor_cache_dir) {
+        let stem = source_mp4
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| !stem.is_empty() && n.contains(stem))
+            {
+                let _ = fs::remove_file(p);
+            }
+        }
+    }
+
+    let thumb_path = ClipMetadata::thumbnail_path_for(source_mp4);
+    let _ = fs::remove_file(&thumb_path);
+    let new_thumb = generate_thumbnail_jpg(source_mp4, &thumb_path, 0.5).ok();
+
+    let sidecar = ClipMetadata::sidecar_path_for(source_mp4);
+    let legacy_sidecar = ClipMetadata::legacy_sidecar_path_for(source_mp4);
+    if let Ok(mut meta) =
+        load_clip_metadata(&sidecar).or_else(|_| load_clip_metadata(&legacy_sidecar))
+    {
+        if let Ok(probed) = probe_media_streams(source_mp4) {
+            meta.duration_sec = probed.duration_sec;
+            meta.width = probed.width;
+            meta.height = probed.height;
+        }
+        meta.file_size_bytes = fs::metadata(source_mp4).map_or(meta.file_size_bytes, |m| m.len());
+        meta.is_edited = true;
+        if let Some(tp) = new_thumb {
+            meta.thumbnail_path = Some(tp);
+        } else {
+            meta.thumbnail_path = None;
+        }
+        let _ = save_clip_metadata(&meta);
+    }
+
+    Ok(source_mp4.to_path_buf())
+}
+
+/// Lossless trims `req.source_path` into a sibling temp file and atomically replaces the original.
+pub fn replace_clip_with_fast_trim(
+    req: &TrimRequest,
+    editor_cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    let tmp_name = format!(
+        ".{}_replacing_{}.mp4",
+        req.source_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("clip"),
+        Uuid::new_v4()
+    );
+    let tmp_path = req
+        .source_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(tmp_name);
+    let mut tmp_req = req.clone();
+    tmp_req.output_path = tmp_path.clone();
+    run_fast_trim(&tmp_req)?;
+    // Remove auto-created sidecar for the temporary file name before replacing original.
+    let _ = fs::remove_file(ClipMetadata::sidecar_path_for(&tmp_path));
+    atomic_replace_and_refresh_sidecar(&req.source_path, &tmp_path, editor_cache_dir)
+}
+
+/// Renders `req` into a sibling temp file and atomically replaces `req.source_path`.
+pub fn replace_clip_with_advanced(
+    req: &AdvancedExportRequest,
+    editor_cache_dir: &Path,
+) -> Result<PathBuf, String> {
+    let tmp_name = format!(
+        ".{}_replacing_{}.mp4",
+        req.source_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("clip"),
+        Uuid::new_v4()
+    );
+    let tmp_path = req
+        .source_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(tmp_name);
+    let mut tmp_req = req.clone();
+    tmp_req.output_path = tmp_path.clone();
+    run_advanced_export(&tmp_req)?;
+    let _ = fs::remove_file(ClipMetadata::sidecar_path_for(&tmp_path));
+    atomic_replace_and_refresh_sidecar(&req.source_path, &tmp_path, editor_cache_dir)
+}
+
+/// Single clip segment inside a [`MergeClipsRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeClipItem {
+    pub source_path: PathBuf,
+    pub start_sec: f64,
+    pub end_sec: f64,
+}
+
+/// Multi-clip concatenation export request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeClipsRequest {
+    pub items: Vec<MergeClipItem>,
+    pub output_path: PathBuf,
+    pub playback_speed: f64,
+    pub fade_in_sec: f64,
+    pub fade_out_sec: f64,
+}
+
+/// Concatenates multiple clips/segments into one `.mp4` normalized to the first clip's resolution.
+pub fn run_merge_clips(req: &MergeClipsRequest) -> Result<PathBuf, String> {
+    if req.items.len() < 2 {
+        return Err("Select at least 2 clips to merge".to_string());
+    }
+    if let Some(parent) = req.output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("create_dir_all failed: {e}"))?;
+        }
+    }
+
+    let ffmpeg = resolve_sidecar_binary("ffmpeg")?;
+    let first_probe = probe_media_streams(&req.items[0].source_path)?;
+    let target_w = first_probe.width.max(2) & !1;
+    let target_h = first_probe.height.max(2) & !1;
+
+    let mut fc = String::new();
+    let mut concat_inputs = String::new();
+    let mut total_dur = 0.0f64;
+
+    for (idx, item) in req.items.iter().enumerate() {
+        let probed = probe_media_streams(&item.source_path)?;
+        let start = item.start_sec.max(0.0);
+        let end = if item.end_sec > start + 0.05 {
+            item.end_sec
+        } else {
+            probed.duration_sec.max(start + 0.2)
+        };
+        let seg_dur = (end - start).max(0.05);
+        total_dur += seg_dur;
+
+        fc.push_str(&format!(
+            "[{idx}:v:0]trim=start={start:.3}:end={end:.3},setpts=PTS-STARTPTS,\
+             scale={target_w}:{target_h}:force_original_aspect_ratio=decrease,\
+             pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=60,format=yuv420p[v{idx}];"
+        ));
+
+        if probed.audio_streams.is_empty() {
+            fc.push_str(&format!(
+                "anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={seg_dur:.3},asetpts=PTS-STARTPTS[a{idx}];"
+            ));
+        } else {
+            fc.push_str(&format!(
+                "[{idx}:a:0]atrim=start={start:.3}:end={end:.3},asetpts=PTS-STARTPTS,\
+                 aformat=sample_rates=48000:channel_layouts=stereo[a{idx}];"
+            ));
+        }
+        concat_inputs.push_str(&format!("[v{idx}][a{idx}]"));
+    }
+
+    let n = req.items.len();
+    fc.push_str(&format!("{concat_inputs}concat=n={n}:v=1:a=1[vcat][acat];"));
+
+    let speed = req.playback_speed.clamp(0.25, 4.0);
+    let mut v_cur = "[vcat]".to_string();
+    let mut a_cur = "[acat]".to_string();
+
+    if (speed - 1.0).abs() > 0.01 {
+        let inv = 1.0 / speed;
+        let atempo = atempo_filters(speed).join(",");
+        fc.push_str(&format!("{v_cur}setpts={inv:.6}*PTS[vspd];"));
+        fc.push_str(&format!("{a_cur}{atempo}[aspd];"));
+        v_cur = "[vspd]".to_string();
+        a_cur = "[aspd]".to_string();
+        total_dur /= speed;
+    }
+
+    let fade_in = req.fade_in_sec.clamp(0.0, 5.0);
+    let fade_out = req.fade_out_sec.clamp(0.0, 5.0);
+    let mut v_filters = Vec::new();
+    let mut a_filters = Vec::new();
+    if fade_in > 0.01 {
+        v_filters.push(format!("fade=t=in:st=0:d={fade_in:.3}"));
+        a_filters.push(format!("afade=t=in:st=0:d={fade_in:.3}"));
+    }
+    if fade_out > 0.01 && total_dur > fade_out + 0.05 {
+        let st = (total_dur - fade_out).max(0.0);
+        v_filters.push(format!("fade=t=out:st={st:.3}:d={fade_out:.3}"));
+        a_filters.push(format!("afade=t=out:st={st:.3}:d={fade_out:.3}"));
+    }
+
+    if v_filters.is_empty() {
+        fc.push_str(&format!("{v_cur}null[vout];"));
+        fc.push_str(&format!("{a_cur}anull[aout]"));
+    } else {
+        fc.push_str(&format!("{v_cur}{}[vout];", v_filters.join(",")));
+        fc.push_str(&format!("{a_cur}{}[aout]", a_filters.join(",")));
+    }
+
+    let mut last_err = String::new();
+    let mut succeeded = false;
+    for (vcodec, preset) in [("h264_nvenc", "p5"), ("libx264", "veryfast")] {
+        let mut cmd = hidden_cmd(&ffmpeg);
+        cmd.args(["-y", "-hide_banner", "-loglevel", "error"]);
+        for item in &req.items {
+            cmd.arg("-i").arg(&item.source_path);
+        }
+        cmd.args([
+            "-filter_complex",
+            &fc,
+            "-map",
+            "[vout]",
+            "-map",
+            "[aout]",
+            "-c:v",
+            vcodec,
+            "-preset",
+            preset,
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "18",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(&req.output_path);
+
+        let out = cmd
+            .output()
+            .map_err(|e| format!("Failed to spawn ffmpeg merge: {e}"))?;
+        if out.status.success() {
+            succeeded = true;
+            break;
+        }
+        last_err = String::from_utf8_lossy(&out.stderr).to_string();
+        warn!("ffmpeg merge with {vcodec} failed, trying fallback: {last_err}");
+    }
+
+    if !succeeded {
+        return Err(format!("ffmpeg merge failed: {last_err}"));
+    }
+
+    mark_edited_sidecar(&req.items[0].source_path, &req.output_path, false);
+    Ok(req.output_path.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

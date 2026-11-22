@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api } from "./api";
 import { EditorView } from "./components/EditorView";
-import { LibraryView } from "./components/LibraryView";
+import { LibraryView, type LibraryPersistedState } from "./components/LibraryView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar, type AppTab } from "./components/Sidebar";
 import { ToastBanner, type UiToast } from "./components/ToastBanner";
@@ -64,6 +64,13 @@ export function App() {
   const [clips, setClips] = useState<ClipMetadata[]>([]);
   const [loadingClips, setLoadingClips] = useState(false);
   const [selectedClip, setSelectedClip] = useState<ClipMetadata | null>(null);
+  const [libraryState, setLibraryState] = useState<LibraryPersistedState>({
+    kindTab: "all",
+    gameFilter: "all",
+    searchQuery: "",
+    sortOrder: "newest",
+  });
+  const libraryScrollTopRef = useRef(0);
 
   const [toasts, setToasts] = useState<UiToast[]>([]);
 
@@ -414,6 +421,9 @@ export function App() {
               <LibraryView
                 clips={clips}
                 loading={loadingClips}
+                persistedState={libraryState}
+                onPersistedStateChange={setLibraryState}
+                scrollTopRef={libraryScrollTopRef}
                 onRefresh={refreshClips}
                 onOpenEditor={(clip) => {
                   setSelectedClip(clip);
@@ -447,6 +457,7 @@ export function App() {
             {activeTab === "editor" && settings && (
               <EditorView
                 clip={selectedClip}
+                allClips={clips}
                 settings={settings}
                 onBackToLibrary={() => selectTab("library")}
                 onClipCreatedOrUpdated={refreshClips}

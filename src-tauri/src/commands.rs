@@ -3,7 +3,8 @@
 use crate::clipboard::copy_file_to_clipboard_cf_hdrop;
 use crate::ffmpeg_editor::{
     capture_frame_png as capture_frame_png_impl, prepare_editor_media as prepare_editor_media_impl,
-    run_advanced_export, run_discord_compress, run_fast_trim, PreparedEditorMedia,
+    replace_clip_with_advanced, replace_clip_with_fast_trim, run_advanced_export,
+    run_discord_compress, run_fast_trim, run_merge_clips, MergeClipsRequest, PreparedEditorMedia,
 };
 use crate::state::{allow_directory_in_asset_scope, AppState};
 use crate::webhook::send_file_to_discord_webhook;
@@ -280,6 +281,35 @@ pub async fn compress_clip_for_discord(
 #[tauri::command]
 pub async fn export_advanced_clip(req: AdvancedExportRequest) -> Result<PathBuf, String> {
     tauri::async_runtime::spawn_blocking(move || run_advanced_export(&req))
+        .await
+        .map_err(|e| format!("Join error: {e}"))?
+}
+
+#[tauri::command]
+pub async fn replace_clip_fast_trim(
+    state: State<'_, AppState>,
+    req: TrimRequest,
+) -> Result<PathBuf, String> {
+    let cache_dir = state.current_settings().storage.temp_dir.join("editor_cache");
+    tauri::async_runtime::spawn_blocking(move || replace_clip_with_fast_trim(&req, &cache_dir))
+        .await
+        .map_err(|e| format!("Join error: {e}"))?
+}
+
+#[tauri::command]
+pub async fn replace_clip_advanced(
+    state: State<'_, AppState>,
+    req: AdvancedExportRequest,
+) -> Result<PathBuf, String> {
+    let cache_dir = state.current_settings().storage.temp_dir.join("editor_cache");
+    tauri::async_runtime::spawn_blocking(move || replace_clip_with_advanced(&req, &cache_dir))
+        .await
+        .map_err(|e| format!("Join error: {e}"))?
+}
+
+#[tauri::command]
+pub async fn merge_clips(req: MergeClipsRequest) -> Result<PathBuf, String> {
+    tauri::async_runtime::spawn_blocking(move || run_merge_clips(&req))
         .await
         .map_err(|e| format!("Join error: {e}"))?
 }

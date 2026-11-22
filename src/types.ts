@@ -443,6 +443,20 @@ export interface FrameScreenshotRequest {
   timestamp_sec: number;
 }
 
+export interface MergeClipItem {
+  source_path: string;
+  start_sec: number;
+  end_sec: number;
+}
+
+export interface MergeClipsRequest {
+  items: MergeClipItem[];
+  output_path: string;
+  playback_speed: number;
+  fade_in_sec: number;
+  fade_out_sec: number;
+}
+
 export type RecorderCommand =
   | { cmd: "start_buffering" }
   | { cmd: "stop_buffering" }

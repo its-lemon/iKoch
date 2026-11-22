@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
   Bookmark,
   Check,
@@ -8,6 +8,7 @@ import {
   FolderOpen,
   FolderSearch,
   Gamepad2,
+  LayoutGrid,
   Monitor,
   Pencil,
   Play,
@@ -25,12 +26,37 @@ import type { ClipMetadata, RecordingKind } from "../types";
 import { formatBytes, formatDate, formatDuration } from "../utils/format";
 import { CustomSelect } from "./CustomSelect";
 
-type KindTab = "all" | RecordingKind | "favorites";
-type SortOrder = "newest" | "oldest" | "longest" | "largest";
+export type KindTab = "all" | RecordingKind | "favorites";
+export type SortOrder = "newest" | "oldest" | "longest" | "largest";
+export type GridColumnsChoice = "auto" | 2 | 3 | 4 | 5;
+
+export interface LibraryPersistedState {
+  kindTab: KindTab;
+  gameFilter: string;
+  searchQuery: string;
+  sortOrder: SortOrder;
+}
+
+const COLUMNS_STORAGE_KEY = "ikoch_library_columns";
+
+function loadStoredColumns(): GridColumnsChoice {
+  try {
+    const raw = localStorage.getItem(COLUMNS_STORAGE_KEY);
+    if (raw === "2" || raw === "3" || raw === "4" || raw === "5") {
+      return Number(raw) as 2 | 3 | 4 | 5;
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return "auto";
+}
 
 interface LibraryViewProps {
   clips: ClipMetadata[];
   loading: boolean;
+  persistedState: LibraryPersistedState;
+  onPersistedStateChange: (next: LibraryPersistedState) => void;
+  scrollTopRef: MutableRefObject<number>;
   onRefresh: () => Promise<void>;
   onOpenEditor: (clip: ClipMetadata) => void;
   onClipUpdated: (clip: ClipMetadata) => void;
@@ -48,6 +74,9 @@ interface LibraryViewProps {
 export function LibraryView({
   clips,
   loading,
+  persistedState,
+  onPersistedStateChange,
+  scrollTopRef,
   onRefresh,
   onOpenEditor,
   onClipUpdated,
@@ -58,10 +87,43 @@ export function LibraryView({
   onNotify,
 }: LibraryViewProps) {
   const { lang, t } = useI18n();
-  const [kindTab, setKindTab] = useState<KindTab>("all");
-  const [gameFilter, setGameFilter] = useState<string>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("newest");
+  const { kindTab, gameFilter, searchQuery, sortOrder } = persistedState;
+  const setKindTab = (v: KindTab) =>
+    onPersistedStateChange({ ...persistedState, kindTab: v });
+  const setGameFilter = (v: string) =>
+    onPersistedStateChange({ ...persistedState, gameFilter: v });
+  const setSearchQuery = (v: string) =>
+    onPersistedStateChange({ ...persistedState, searchQuery: v });
+  const setSortOrder = (v: SortOrder) =>
+    onPersistedStateChange({ ...persistedState, sortOrder: v });
+
+  const [gridColumns, setGridColumns] = useState<GridColumnsChoice>(() =>
+    loadStoredColumns()
+  );
+  const gridContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const targetScroll = scrollTopRef.current;
+    if (targetScroll <= 0) return;
+    const el = gridContainerRef.current;
+    if (!el) return;
+    el.scrollTop = targetScroll;
+    const rafId = requestAnimationFrame(() => {
+      if (gridContainerRef.current) {
+        gridContainerRef.current.scrollTop = targetScroll;
+      }
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [scrollTopRef]);
+
+  const handleChangeGridColumns = (choice: GridColumnsChoice) => {
+    setGridColumns(choice);
+    try {
+      localStorage.setItem(COLUMNS_STORAGE_KEY, String(choice));
+    } catch {
+      // Ignore storage access errors
+    }
+  };
 
   const [hoveredCardPath, setHoveredCardPath] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
@@ -345,12 +407,35 @@ export function LibraryView({
             className="w-40"
             menuMinWidth={170}
           />
+
+          <div
+            className="ml-auto inline-flex items-center gap-0.5 rounded-xl bg-white/[0.04] p-1 ring-1 ring-white/[0.06]"
+            title={t.library.columnsLabel}
+          >
+            <LayoutGrid className="mx-1.5 h-3.5 w-3.5 text-slate-400" />
+            {(["auto", 2, 3, 4, 5] as GridColumnsChoice[]).map((col) => (
+              <button
+                key={String(col)}
+                type="button"
+                onClick={() => handleChangeGridColumns(col)}
+                className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${
+                  gridColumns === col
+                    ? "bg-[var(--accent)] text-white shadow-sm"
+                    : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-200"
+                }`}
+              >
+                {col === "auto" ? t.library.columnsAuto : col}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* Cards Grid */}
       <div
-        onScroll={() => {
+        ref={gridContainerRef}
+        onScroll={(e) => {
+          scrollTopRef.current = e.currentTarget.scrollTop;
           if (contextMenu) setContextMenu(null);
         }}
         className="flex-1 overflow-y-auto p-6"
@@ -386,7 +471,19 @@ export function LibraryView({
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+          <div
+            className={`grid grid-cols-1 gap-5 ${
+              gridColumns === 2
+                ? "sm:grid-cols-2"
+                : gridColumns === 3
+                  ? "sm:grid-cols-2 lg:grid-cols-3"
+                  : gridColumns === 4
+                    ? "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                    : gridColumns === 5
+                      ? "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+                      : "md:grid-cols-2 xl:grid-cols-3"
+            }`}
+          >
             {filteredClips.map((clip) => {
               const thumbSrc =
                 clip.thumbnail_path || generatedThumbs[clip.file_path] || null;

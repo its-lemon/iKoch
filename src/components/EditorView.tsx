@@ -1,26 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowDown,
   ArrowLeft,
-  Camera,
+  ArrowUp,
   ClipboardCopy,
   Download,
   Film,
+  Layers,
   Loader2,
   Maximize2,
   Minimize2,
   Pause,
   Play,
+  Plus,
+  RefreshCw,
   Scissors,
-  Smartphone,
-  Square,
+  Search,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import { api, toAssetUrl } from "../api";
 import type {
   AppLanguage,
   AppSettings,
-  AspectRatioPreset,
   ClipMetadata,
   DiscordPreset,
   PreparedEditorMedia,
@@ -28,7 +31,6 @@ import type {
   TrackKind,
   TrackMixSpec,
   TrackWaveform,
-  TrimAudioExportMode,
 } from "../types";
 import { useI18n } from "../i18n";
 import {
@@ -38,11 +40,11 @@ import {
   trackDisplayName,
 } from "../utils/format";
 import { sliderFillStyle } from "./AccentSlider";
-import { CustomSelect, type SelectOption } from "./CustomSelect";
 import { TimelinePanel } from "./TimelinePanel";
 
 interface EditorViewProps {
   clip: ClipMetadata | null;
+  allClips: ClipMetadata[];
   settings: AppSettings;
   onBackToLibrary: () => void;
   onClipCreatedOrUpdated: () => Promise<void>;
@@ -52,6 +54,13 @@ interface EditorViewProps {
     message: string,
     variant?: "success" | "error" | "info"
   ) => void;
+}
+
+interface MergeQueueItem {
+  uid: string;
+  clip: ClipMetadata;
+  start_sec: number;
+  end_sec: number;
 }
 
 interface TrackMixState {
@@ -66,7 +75,6 @@ interface EditHistoryState {
   playbackSpeed: number;
   fadeInSec: number;
   fadeOutSec: number;
-  aspectRatio: AspectRatioPreset;
 }
 
 function defaultMixList(
@@ -85,6 +93,7 @@ function defaultMixList(
 
 export function EditorView({
   clip,
+  allClips,
   settings,
   onBackToLibrary,
   onClipCreatedOrUpdated,
@@ -124,18 +133,23 @@ export function EditorView({
   const [selectedSegmentIdx, setSelectedSegmentIdx] = useState(0);
 
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [aspectRatio, setAspectRatio] =
-    useState<AspectRatioPreset>("original");
   const [fadeInSec, setFadeInSec] = useState(0);
   const [fadeOutSec, setFadeOutSec] = useState(0);
+
+  const [videoSrcSuspended, setVideoSrcSuspended] = useState(false);
+  const [mediaReloadNonce, setMediaReloadNonce] = useState(0);
+  const [saveChoiceModal, setSaveChoiceModal] = useState<
+    "trim" | "advanced" | null
+  >(null);
+
+  const [mergeItems, setMergeItems] = useState<MergeQueueItem[]>([]);
+  const [mergeModalOpen, setMergeModalOpen] = useState(false);
+  const [mergeSearch, setMergeSearch] = useState("");
 
   const [undoStack, setUndoStack] = useState<EditHistoryState[]>([]);
   const [redoStack, setRedoStack] = useState<EditHistoryState[]>([]);
 
   const [trackMix, setTrackMix] = useState<TrackMixState[]>([]);
-  const [trimAudioMode, setTrimAudioMode] = useState<TrimAudioExportMode>(
-    "keep_separate_tracks"
-  );
 
   const [discordPresetKind, setDiscordPresetKind] = useState<
     "mb10" | "mb50" | "custom_mb"
@@ -145,7 +159,6 @@ export function EditorView({
   const [busyTask, setBusyTask] = useState<string | null>(null);
   const [busyElapsedSec, setBusyElapsedSec] = useState(0);
   const [lastOutputPath, setLastOutputPath] = useState<string | null>(null);
-  const [sidebarTab, setSidebarTab] = useState<"quick" | "export">("quick");
 
   useEffect(() => {
     const onFsChange = () => {
@@ -175,9 +188,8 @@ export function EditorView({
       playbackSpeed,
       fadeInSec,
       fadeOutSec,
-      aspectRatio,
     }),
-    [aspectRatio, fadeInSec, fadeOutSec, playbackSpeed, segments]
+    [fadeInSec, fadeOutSec, playbackSpeed, segments]
   );
 
   const pushUndoSnapshot = useCallback(() => {
@@ -191,7 +203,6 @@ export function EditorView({
     setPlaybackSpeed(snap.playbackSpeed);
     setFadeInSec(snap.fadeInSec);
     setFadeOutSec(snap.fadeOutSec);
-    setAspectRatio(snap.aspectRatio);
     setSelectedSegmentIdx((idx) =>
       Math.min(idx, Math.max(0, snap.segments.length - 1))
     );
@@ -255,19 +266,30 @@ export function EditorView({
     setCurrentTime(0);
     setLastOutputPath(null);
     setPlaybackSpeed(1);
-    setAspectRatio("original");
     setFadeInSec(0);
     setFadeOutSec(0);
     setUndoStack([]);
     setRedoStack([]);
     setSelectedSegmentIdx(0);
     setTrackMix([]);
+    setSaveChoiceModal(null);
 
-    if (!clip) return;
+    if (!clip) {
+      setMergeItems([]);
+      return;
+    }
 
     const initialDur = Math.max(clip.duration_sec || 1, 0.2);
     setDurationSec(initialDur);
     setSegments([{ start_sec: 0, end_sec: Number(initialDur.toFixed(2)) }]);
+    setMergeItems([
+      {
+        uid: `${clip.file_path}_0`,
+        clip,
+        start_sec: 0,
+        end_sec: Number(initialDur.toFixed(2)),
+      },
+    ]);
 
     let cancelled = false;
     setLoadingMedia(true);
@@ -369,7 +391,7 @@ export function EditorView({
       cancelled = true;
       cleanupStemAudio();
     };
-  }, [cleanupStemAudio, clip?.file_path]);
+  }, [cleanupStemAudio, clip?.file_path, mediaReloadNonce]);
 
   // Apply live track volume (0..200%) & mute + masterVolume directly to Web Audio GainNodes.
   useEffect(() => {
@@ -701,12 +723,30 @@ export function EditorView({
       muted: tr.muted,
     }));
 
-  const handleFastTrim = async () => {
+  const releaseMediaHandlesForReplace = async () => {
+    setIsPlaying(false);
+    cleanupStemAudio();
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.removeAttribute("src");
+      videoRef.current.load();
+    }
+    setVideoSrcSuspended(true);
+    await new Promise((r) => window.setTimeout(r, 160));
+  };
+
+  const handleFastTrim = async (replaceOriginal = false) => {
     const seg = segments[selectedSegmentIdx] ?? segments[0];
     if (!seg) return;
-    setBusyTask(t.editor.busyLosslessTrim);
+    setSaveChoiceModal(null);
+    setBusyTask(
+      replaceOriginal ? t.editor.busyReplacing : t.editor.busyLosslessTrim
+    );
     try {
-      const outPath = await api.fastTrimClip({
+      const hasCustomMixer = trackMix.some(
+        (tr) => tr.muted || Math.abs(tr.volume - 1.0) > 0.02
+      );
+      const req = {
         clip_id: clip.id,
         source_path: clip.file_path,
         output_path: deriveExportPath(
@@ -718,14 +758,30 @@ export function EditorView({
         ),
         start_sec: seg.start_sec,
         end_sec: seg.end_sec,
-        audio_mode: trimAudioMode,
+        audio_mode: (hasCustomMixer
+          ? "mix_to_single_track"
+          : "keep_separate_tracks") as "mix_to_single_track" | "keep_separate_tracks",
         game_volume: gameTrack && !gameTrack.muted ? gameTrack.volume : 0,
         mic_volume: micTrack && !micTrack.muted ? micTrack.volume : 0,
-      });
+      };
+      let outPath: string;
+      if (replaceOriginal) {
+        await releaseMediaHandlesForReplace();
+        outPath = await api.replaceClipFastTrim(req);
+        setVideoSrcSuspended(false);
+        setMediaReloadNonce((n) => n + 1);
+      } else {
+        outPath = await api.fastTrimClip(req);
+      }
       setLastOutputPath(outPath);
       await onClipCreatedOrUpdated();
-      onNotify(t.editor.trimDoneTitle, outPath, "success");
+      onNotify(
+        replaceOriginal ? t.editor.replaceDoneTitle : t.editor.trimDoneTitle,
+        outPath,
+        "success"
+      );
     } catch (err) {
+      setVideoSrcSuspended(false);
       onNotify(t.editor.trimErrorTitle, String(err), "error");
     } finally {
       setBusyTask(null);
@@ -776,33 +832,30 @@ export function EditorView({
   };
 
   const handleAdvancedExport = async (opts: {
-    aspectOverride?: AspectRatioPreset;
     gif?: boolean;
     subclip?: boolean;
     withDiscordLimit?: boolean;
+    replaceOriginal?: boolean;
   }) => {
     const isGif = Boolean(opts.gif);
     const isSubclip = Boolean(opts.subclip);
-    const aspect = opts.aspectOverride ?? aspectRatio;
-    const suffix = isGif
-      ? "gif"
-      : isSubclip
-        ? "subclip"
-        : aspect === "vertical9x16_blurred"
-          ? "shorts_9x16"
-          : "edited";
+    const replaceOriginal = Boolean(opts.replaceOriginal) && !isGif && !isSubclip;
+    const suffix = isGif ? "gif" : isSubclip ? "subclip" : "edited";
     const ext = isGif ? "gif" : "mp4";
 
+    setSaveChoiceModal(null);
     setBusyTask(
-      isGif
-        ? t.editor.busyGif
-        : isSubclip
-          ? t.editor.busySubclip
-          : t.editor.busyExport
+      replaceOriginal
+        ? t.editor.busyReplacing
+        : isGif
+          ? t.editor.busyGif
+          : isSubclip
+            ? t.editor.busySubclip
+            : t.editor.busyExport
     );
 
     try {
-      const outPath = await api.exportAdvancedClip({
+      const req = {
         clip_id: clip.id,
         source_path: clip.file_path,
         output_path: deriveExportPath(
@@ -814,7 +867,7 @@ export function EditorView({
         ),
         segments,
         playback_speed: playbackSpeed,
-        aspect_ratio: aspect,
+        aspect_ratio: "original" as const,
         text_overlays: [],
         fade_in_sec: fadeInSec,
         fade_out_sec: fadeOutSec,
@@ -823,44 +876,64 @@ export function EditorView({
         export_gif: isGif,
         subclip_from_session: isSubclip,
         discord_webhook_url: null,
-      });
+      };
+      let outPath: string;
+      if (replaceOriginal) {
+        await releaseMediaHandlesForReplace();
+        outPath = await api.replaceClipAdvanced(req);
+        setVideoSrcSuspended(false);
+        setMediaReloadNonce((n) => n + 1);
+      } else {
+        outPath = await api.exportAdvancedClip(req);
+      }
       setLastOutputPath(outPath);
       await onClipCreatedOrUpdated();
       onNotify(
-        isGif
-          ? t.editor.gifDoneTitle
-          : isSubclip
-            ? t.editor.subclipDoneTitle
-            : t.editor.exportDoneTitle,
+        replaceOriginal
+          ? t.editor.replaceDoneTitle
+          : isGif
+            ? t.editor.gifDoneTitle
+            : isSubclip
+              ? t.editor.subclipDoneTitle
+              : t.editor.exportDoneTitle,
         outPath,
         "success"
       );
     } catch (err) {
+      setVideoSrcSuspended(false);
       onNotify(t.editor.exportErrorTitle, String(err), "error");
     } finally {
       setBusyTask(null);
     }
   };
 
-  const handleScreenshotPng = async () => {
-    setBusyTask(t.editor.busyPng);
+  const handleMergeClips = async () => {
+    if (mergeItems.length < 2) return;
+    setBusyTask(t.editor.busyMerging);
     try {
-      const pngPath = await api.captureFramePng({
-        clip_id: clip.id,
-        source_path: clip.file_path,
-        output_png_path: deriveExportPath(
-          clip.file_path,
-          "frame",
-          "png",
-          clip.game_name,
+      const first = mergeItems[0].clip;
+      const outPath = await api.mergeClips({
+        items: mergeItems.map((m) => ({
+          source_path: m.clip.file_path,
+          start_sec: m.start_sec,
+          end_sec: m.end_sec,
+        })),
+        output_path: deriveExportPath(
+          first.file_path,
+          "merged",
+          "mp4",
+          first.game_name,
           settings.storage.output_dir
         ),
-        timestamp_sec: currentTime,
+        playback_speed: playbackSpeed,
+        fade_in_sec: fadeInSec,
+        fade_out_sec: fadeOutSec,
       });
-      setLastOutputPath(pngPath);
-      onNotify(t.editor.pngDoneTitle, pngPath, "success");
+      setLastOutputPath(outPath);
+      await onClipCreatedOrUpdated();
+      onNotify(t.editor.mergeDoneTitle, outPath, "success");
     } catch (err) {
-      onNotify(t.editor.pngErrorTitle, String(err), "error");
+      onNotify(t.editor.mergeErrorTitle, String(err), "error");
     } finally {
       setBusyTask(null);
     }
@@ -889,13 +962,6 @@ export function EditorView({
         return fallback;
     }
   };
-
-  const trimAudioOptions: SelectOption[] = [
-    { value: "keep_separate_tracks", label: t.editor.trimKeepSeparate },
-    { value: "mix_to_single_track", label: t.editor.trimMixSingle },
-    { value: "game_track_only", label: t.editor.trimGameOnly },
-    { value: "mic_track_only", label: t.editor.trimMicOnly },
-  ];
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[var(--bg-app)]">
@@ -932,38 +998,23 @@ export function EditorView({
           </div>
         </div>
 
-        {/* Framing preset pills */}
-        <div className="flex items-center gap-1 rounded-xl bg-white/[0.04] p-1">
-          {(
-            [
-              ["original", t.editor.aspect16x9],
-              ["vertical9x16_blurred", t.editor.aspect9x16],
-              ["square1x1", t.editor.aspect1x1],
-            ] as [AspectRatioPreset, string][]
-          ).map(([preset, label]) => (
-            <button
-              key={preset}
-              type="button"
-              onClick={() => {
-                if (aspectRatio !== preset) {
-                  pushUndoSnapshot();
-                  setAspectRatio(preset);
-                }
-              }}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                aspectRatio === preset
-                  ? "bg-[var(--accent)] text-white shadow-sm"
-                  : "text-slate-400 hover:bg-white/[0.05] hover:text-slate-200"
-              }`}
-            >
-              {preset === "vertical9x16_blurred" && (
-                <Smartphone className="h-3.5 w-3.5" />
-              )}
-              {preset === "square1x1" && <Square className="h-3 w-3" />}
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* Add Clip / Multi-Clip Merge trigger */}
+        <button
+          type="button"
+          onClick={() => {
+            setMergeSearch("");
+            setMergeModalOpen(true);
+          }}
+          className="inline-flex items-center gap-1.5 rounded-xl bg-[rgb(var(--accent-rgb)/0.14)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-hover)] ring-1 ring-[rgb(var(--accent-rgb)/0.35)] transition hover:bg-[var(--accent)] hover:text-white"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          {t.editor.addClipBtn}
+          {mergeItems.length >= 2 && (
+            <span className="ml-0.5 rounded-md bg-white/15 px-1.5 py-0.2 text-[10px] font-bold">
+              {mergeItems.length}
+            </span>
+          )}
+        </button>
       </div>
 
       {/* Main Split Workspace */}
@@ -982,7 +1033,7 @@ export function EditorView({
             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
               <video
                 ref={videoRef}
-                src={toAssetUrl(clip.file_path)}
+                src={videoSrcSuspended ? undefined : toAssetUrl(clip.file_path)}
                 muted={stemsReady}
                 onPlay={() => {
                   setIsPlaying(true);
@@ -1028,30 +1079,6 @@ export function EditorView({
                 onDoubleClick={() => void toggleFullscreen()}
                 className="h-full w-full cursor-pointer object-contain"
               />
-
-              {aspectRatio === "vertical9x16_blurred" && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center transition-all">
-                  <div className="h-full flex-1 bg-black/65 backdrop-blur-sm" />
-                  <div className="relative aspect-[9/16] h-full border-x-2 border-[var(--accent)] shadow-[0_0_24px_rgb(var(--accent-rgb)/0.35)]">
-                    <span className="absolute left-2 top-2 rounded bg-[var(--accent)] px-1.5 py-0.5 text-[10px] font-bold text-white">
-                      {t.editor.badge9x16}
-                    </span>
-                  </div>
-                  <div className="h-full flex-1 bg-black/65 backdrop-blur-sm" />
-                </div>
-              )}
-
-              {aspectRatio === "square1x1" && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center transition-all">
-                  <div className="h-full flex-1 bg-black/60 backdrop-blur-[2px]" />
-                  <div className="relative aspect-square h-full border-x-2 border-violet-400">
-                    <span className="absolute left-2 top-2 rounded bg-violet-600/85 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                      {t.editor.badge1x1}
-                    </span>
-                  </div>
-                  <div className="h-full flex-1 bg-black/60 backdrop-blur-[2px]" />
-                </div>
-              )}
             </div>
 
             {/* Unified YouTube/Medal Bottom Control Bar */}
@@ -1259,6 +1286,162 @@ export function EditorView({
             </div>
           </div>
 
+          {/* Multi-Clip Merge Queue (shown when 2+ clips are added) */}
+          {mergeItems.length >= 2 && (
+            <div className="rounded-2xl bg-[var(--bg-panel)] p-3 ring-1 ring-[rgb(var(--accent-rgb)/0.3)]">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-[var(--accent-hover)]" />
+                  <span className="text-xs font-bold text-white">
+                    {t.editor.mergeTitle}
+                  </span>
+                  <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[10px] font-semibold text-slate-300">
+                    {t.editor.mergeClipCount(mergeItems.length)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMergeSearch("");
+                      setMergeModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-lg bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition hover:bg-white/[0.12]"
+                  >
+                    <Plus className="h-3 w-3" />
+                    {t.editor.addClipBtn}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(busyTask)}
+                    onClick={() => void handleMergeClips()}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1 text-[11px] font-semibold text-white shadow transition hover:bg-[var(--accent-hover)] disabled:opacity-40"
+                  >
+                    <Film className="h-3 w-3" />
+                    {t.editor.mergeExportBtn}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex max-h-28 flex-col gap-1.5 overflow-y-auto pr-1">
+                {mergeItems.map((item, idx) => (
+                  <div
+                    key={item.uid}
+                    className="flex items-center gap-2 rounded-xl bg-white/[0.035] px-2.5 py-1.5 text-xs ring-1 ring-white/[0.05]"
+                  >
+                    <span className="w-4 text-center font-mono text-[10px] font-bold text-slate-400">
+                      {idx + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium text-slate-100">
+                      {item.clip.title}
+                    </span>
+                    <div className="flex items-center gap-1 font-mono text-[10px] text-slate-400">
+                      <input
+                        type="number"
+                        min={0}
+                        max={Math.max(0, item.end_sec - 0.1)}
+                        step={0.1}
+                        value={Number(item.start_sec.toFixed(1))}
+                        onChange={(e) => {
+                          const v = Math.max(
+                            0,
+                            Math.min(
+                              item.end_sec - 0.1,
+                              Number(e.target.value) || 0
+                            )
+                          );
+                          setMergeItems((prev) =>
+                            prev.map((m) =>
+                              m.uid === item.uid ? { ...m, start_sec: v } : m
+                            )
+                          );
+                        }}
+                        className="w-12 rounded bg-black/40 px-1.5 py-0.5 text-center text-slate-200 ring-1 ring-white/[0.08]"
+                      />
+                      <span>→</span>
+                      <input
+                        type="number"
+                        min={item.start_sec + 0.1}
+                        max={Math.max(item.clip.duration_sec || 600, 0.2)}
+                        step={0.1}
+                        value={Number(item.end_sec.toFixed(1))}
+                        onChange={(e) => {
+                          const maxD = Math.max(
+                            item.clip.duration_sec || 600,
+                            0.2
+                          );
+                          const v = Math.max(
+                            item.start_sec + 0.1,
+                            Math.min(maxD, Number(e.target.value) || maxD)
+                          );
+                          setMergeItems((prev) =>
+                            prev.map((m) =>
+                              m.uid === item.uid ? { ...m, end_sec: v } : m
+                            )
+                          );
+                        }}
+                        className="w-12 rounded bg-black/40 px-1.5 py-0.5 text-center text-slate-200 ring-1 ring-white/[0.08]"
+                      />
+                      <span>{t.secShort}</span>
+                    </div>
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        title={t.editor.moveUp}
+                        onClick={() =>
+                          setMergeItems((prev) => {
+                            if (idx === 0) return prev;
+                            const next = [...prev];
+                            [next[idx - 1], next[idx]] = [
+                              next[idx],
+                              next[idx - 1],
+                            ];
+                            return next;
+                          })
+                        }
+                        className="rounded p-1 text-slate-400 transition hover:bg-white/[0.08] hover:text-white disabled:opacity-25"
+                      >
+                        <ArrowUp className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === mergeItems.length - 1}
+                        title={t.editor.moveDown}
+                        onClick={() =>
+                          setMergeItems((prev) => {
+                            if (idx >= prev.length - 1) return prev;
+                            const next = [...prev];
+                            [next[idx + 1], next[idx]] = [
+                              next[idx],
+                              next[idx + 1],
+                            ];
+                            return next;
+                          })
+                        }
+                        className="rounded p-1 text-slate-400 transition hover:bg-white/[0.08] hover:text-white disabled:opacity-25"
+                      >
+                        <ArrowDown className="h-3 w-3" />
+                      </button>
+                      <button
+                        type="button"
+                        title={t.editor.removeClip}
+                        onClick={() =>
+                          setMergeItems((prev) =>
+                            prev.filter((m) => m.uid !== item.uid)
+                          )
+                        }
+                        className="rounded p-1 text-slate-400 transition hover:bg-rose-500/20 hover:text-rose-300"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Interactive Waveform Timeline (no duplicate inspector row) */}
           <TimelinePanel
             durationSec={durationSec}
@@ -1333,237 +1516,265 @@ export function EditorView({
             </div>
           )}
 
-          {/* 2-Tab Switcher: Quick | Export */}
-          <div className="grid grid-cols-2 rounded-xl bg-white/[0.04] p-1">
-            <button
-              type="button"
-              onClick={() => setSidebarTab("quick")}
-              className={`rounded-lg py-1.5 text-xs font-semibold transition ${
-                sidebarTab === "quick"
-                  ? "bg-[var(--accent)] text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              {t.editor.tabQuick}
-            </button>
-            <button
-              type="button"
-              onClick={() => setSidebarTab("export")}
-              className={`rounded-lg py-1.5 text-xs font-semibold transition ${
-                sidebarTab === "export"
-                  ? "bg-[var(--accent)] text-white shadow-sm"
-                  : "text-slate-400 hover:text-white"
-              }`}
-            >
-              {t.editor.tabExport}
-            </button>
+          <div className="space-y-3">
+            {/* Trim */}
+            <div className="space-y-2.5 rounded-2xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                {t.editor.trimAndSubclip}
+              </div>
+
+              <button
+                type="button"
+                disabled={Boolean(busyTask)}
+                onClick={() => setSaveChoiceModal("trim")}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600/90 py-2.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+              >
+                <Scissors className="h-3.5 w-3.5" />
+                {t.editor.trimLosslessBtn}
+              </button>
+            </div>
+
+            {/* Compress for Discord */}
+            <div className="space-y-2.5 rounded-2xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  {t.editor.forDiscord}
+                </span>
+                <span className="font-mono text-[10px] text-slate-400">
+                  ~{estimatedDiscordBitrateKbps} kbps
+                </span>
+              </div>
+
+              <div className="flex gap-1.5">
+                {(
+                  [
+                    ["mb10", t.editor.preset10Mb],
+                    ["mb50", t.editor.preset50Mb],
+                    ["custom_mb", t.editor.presetCustom],
+                  ] as const
+                ).map(([presetId, label]) => (
+                  <button
+                    key={presetId}
+                    type="button"
+                    onClick={() => setDiscordPresetKind(presetId)}
+                    className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
+                      discordPresetKind === presetId
+                        ? "bg-[#5865F2] text-white"
+                        : "bg-white/[0.05] text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {discordPresetKind === "custom_mb" && (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={2}
+                    max={500}
+                    value={customDiscordMb}
+                    onChange={(e) =>
+                      setCustomDiscordMb(
+                        Math.max(1, Number(e.target.value) || 10)
+                      )
+                    }
+                    className="w-20 rounded-lg bg-black/40 px-2.5 py-1 text-xs text-white ring-1 ring-white/[0.08]"
+                  />
+                  <span className="text-xs text-slate-400">
+                    {t.editor.mbLimit}
+                  </span>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={Boolean(busyTask)}
+                onClick={() => void handleDiscordCompress()}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5865F2] py-2 text-xs font-semibold text-white transition hover:bg-[#4752C4] disabled:opacity-40"
+              >
+                <Download className="h-3.5 w-3.5" />
+                {t.editor.compressDiscordBtn}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void handleCopyPathForDiscord(clip.file_path)}
+                className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-white/[0.05] py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.1] hover:text-white"
+              >
+                <ClipboardCopy className="h-3.5 w-3.5" />
+                {t.editor.copySourceCtrlV}
+              </button>
+            </div>
           </div>
-
-          {sidebarTab === "quick" ? (
-            <div className="space-y-3">
-              {/* Lossless Trim & Sub-clip */}
-              <div className="space-y-2.5 rounded-2xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  {t.editor.trimAndSubclip}
-                </div>
-
-                <CustomSelect
-                  value={trimAudioMode}
-                  options={trimAudioOptions}
-                  onChange={(val) =>
-                    setTrimAudioMode(val as TrimAudioExportMode)
-                  }
-                  ariaLabel={t.editor.trimAndSubclip}
-                />
-
-                <button
-                  type="button"
-                  disabled={Boolean(busyTask)}
-                  onClick={() => void handleFastTrim()}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600/90 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-40"
-                >
-                  <Scissors className="h-3.5 w-3.5" />
-                  {t.editor.trimLosslessBtn}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={Boolean(busyTask)}
-                  onClick={() => void handleAdvancedExport({ subclip: true })}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/[0.06] py-2 text-xs font-semibold text-violet-300 transition hover:bg-violet-600 hover:text-white disabled:opacity-40"
-                >
-                  <Film className="h-3.5 w-3.5" />
-                  {t.editor.subclipBtn}
-                </button>
-              </div>
-
-              {/* Compress for Discord */}
-              <div className="space-y-2.5 rounded-2xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    {t.editor.forDiscord}
-                  </span>
-                  <span className="font-mono text-[10px] text-slate-400">
-                    ~{estimatedDiscordBitrateKbps} kbps
-                  </span>
-                </div>
-
-                <div className="flex gap-1.5">
-                  {(
-                    [
-                      ["mb10", t.editor.preset10Mb],
-                      ["mb50", t.editor.preset50Mb],
-                      ["custom_mb", t.editor.presetCustom],
-                    ] as const
-                  ).map(([presetId, label]) => (
-                    <button
-                      key={presetId}
-                      type="button"
-                      onClick={() => setDiscordPresetKind(presetId)}
-                      className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
-                        discordPresetKind === presetId
-                          ? "bg-[#5865F2] text-white"
-                          : "bg-white/[0.05] text-slate-400 hover:text-white"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-
-                {discordPresetKind === "custom_mb" && (
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min={2}
-                      max={500}
-                      value={customDiscordMb}
-                      onChange={(e) =>
-                        setCustomDiscordMb(
-                          Math.max(1, Number(e.target.value) || 10)
-                        )
-                      }
-                      className="w-20 rounded-lg bg-black/40 px-2.5 py-1 text-xs text-white ring-1 ring-white/[0.08]"
-                    />
-                    <span className="text-xs text-slate-400">
-                      {t.editor.mbLimit}
-                    </span>
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  disabled={Boolean(busyTask)}
-                  onClick={() => void handleDiscordCompress()}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5865F2] py-2 text-xs font-semibold text-white transition hover:bg-[#4752C4] disabled:opacity-40"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  {t.editor.compressDiscordBtn}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => void handleCopyPathForDiscord(clip.file_path)}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-white/[0.05] py-1.5 text-[11px] font-medium text-slate-300 transition hover:bg-white/[0.1] hover:text-white"
-                >
-                  <ClipboardCopy className="h-3.5 w-3.5" />
-                  {t.editor.copySourceCtrlV}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {/* Full Export */}
-              <div className="space-y-2 rounded-2xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  {t.editor.renderAndFormats}
-                </div>
-
-                <button
-                  type="button"
-                  disabled={Boolean(busyTask)}
-                  onClick={() => void handleAdvancedExport({})}
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] py-2.5 text-xs font-semibold text-white shadow transition hover:bg-[var(--accent-hover)] disabled:opacity-40"
-                >
-                  <Film className="h-3.5 w-3.5" />
-                  {t.editor.exportMp4Hq}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={Boolean(busyTask)}
-                  onClick={() =>
-                    void handleAdvancedExport({
-                      aspectOverride: "vertical9x16_blurred",
-                    })
-                  }
-                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/[0.06] py-2 text-xs font-semibold text-[var(--accent-hover)] transition hover:bg-[var(--accent)] hover:text-white disabled:opacity-40"
-                >
-                  <Smartphone className="h-3.5 w-3.5" />
-                  {t.editor.exportShorts}
-                </button>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    disabled={Boolean(busyTask)}
-                    onClick={() => void handleAdvancedExport({ gif: true })}
-                    className="flex items-center justify-center gap-1.5 rounded-xl bg-white/[0.05] py-2 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-40"
-                  >
-                    {t.editor.exportGif}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={Boolean(busyTask)}
-                    onClick={() => void handleScreenshotPng()}
-                    className="flex items-center justify-center gap-1.5 rounded-xl bg-white/[0.05] py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.1] disabled:opacity-40"
-                  >
-                    <Camera className="h-3.5 w-3.5" />
-                    {t.editor.capturePng}
-                  </button>
-                </div>
-              </div>
-
-              {/* Fade In / Fade Out */}
-              <div className="space-y-2.5 rounded-2xl bg-white/[0.03] p-3 ring-1 ring-white/[0.06]">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  {t.editor.fadeTitle}
-                </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="text-[11px] text-slate-400">
-                    <div>{t.editor.fadeIn(fadeInSec.toFixed(1))}</div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={3}
-                      step={0.1}
-                      value={fadeInSec}
-                      onPointerDown={pushUndoSnapshot}
-                      onChange={(e) => setFadeInSec(Number(e.target.value))}
-                      style={sliderFillStyle(fadeInSec, 0, 3)}
-                      className="ikoch-slider mt-1.5 w-full"
-                    />
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    <div>{t.editor.fadeOut(fadeOutSec.toFixed(1))}</div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={3}
-                      step={0.1}
-                      value={fadeOutSec}
-                      onPointerDown={pushUndoSnapshot}
-                      onChange={(e) => setFadeOutSec(Number(e.target.value))}
-                      style={sliderFillStyle(fadeOutSec, 0, 3)}
-                      className="ikoch-slider mt-1.5 w-full"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </aside>
       </div>
+
+      {/* Save Choice Modal: Replace Original vs Save as New */}
+      {saveChoiceModal && (
+        <div
+          onClick={() => setSaveChoiceModal(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-white/[0.08] bg-[var(--bg-panel)] p-5 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white">
+                  {t.editor.saveChoiceTitle}
+                </h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  {t.editor.saveChoiceDesc}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaveChoiceModal(null)}
+                className="rounded-lg p-1 text-slate-400 transition hover:bg-white/[0.08] hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  if (saveChoiceModal === "trim") {
+                    void handleFastTrim(true);
+                  } else {
+                    void handleAdvancedExport({ replaceOriginal: true });
+                  }
+                }}
+                className="flex w-full items-start gap-3 rounded-xl bg-amber-500/15 p-3 text-left ring-1 ring-amber-400/35 transition hover:bg-amber-500/25"
+              >
+                <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                <div>
+                  <div className="text-xs font-bold text-amber-200">
+                    {t.editor.replaceOriginalBtn}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-slate-300">
+                    {t.editor.replaceOriginalDesc}
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (saveChoiceModal === "trim") {
+                    void handleFastTrim(false);
+                  } else {
+                    void handleAdvancedExport({ replaceOriginal: false });
+                  }
+                }}
+                className="flex w-full items-start gap-3 rounded-xl bg-[rgb(var(--accent-rgb)/0.15)] p-3 text-left ring-1 ring-[rgb(var(--accent-rgb)/0.35)] transition hover:bg-[rgb(var(--accent-rgb)/0.25)]"
+              >
+                <Film className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-hover)]" />
+                <div>
+                  <div className="text-xs font-bold text-white">
+                    {t.editor.saveAsNewBtn}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-slate-300">
+                    {t.editor.saveAsNewDesc}
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Clip Modal for Multi-Clip Merge */}
+      {mergeModalOpen && (
+        <div
+          onClick={() => setMergeModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[75vh] w-full max-w-lg flex-col rounded-2xl border border-white/[0.08] bg-[var(--bg-panel)] p-5 shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white">
+                  {t.editor.mergeAddModalTitle}
+                </h3>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {t.editor.mergeHint}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMergeModalOpen(false)}
+                className="rounded-lg p-1 text-slate-400 transition hover:bg-white/[0.08] hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="relative mt-3">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
+              <input
+                type="text"
+                value={mergeSearch}
+                onChange={(e) => setMergeSearch(e.target.value)}
+                placeholder={t.editor.mergeAddModalSearch}
+                className="w-full rounded-xl bg-white/[0.05] py-2 pl-8 pr-3 text-xs text-white placeholder-slate-500 ring-1 ring-white/[0.08] outline-none focus:ring-[rgb(var(--accent-rgb)/0.6)]"
+              />
+            </div>
+
+            <div className="mt-3 flex-1 space-y-1.5 overflow-y-auto pr-1">
+              {allClips
+                .filter((c) => {
+                  const q = mergeSearch.trim().toLowerCase();
+                  if (!q) return true;
+                  return `${c.title} ${c.game_name}`.toLowerCase().includes(q);
+                })
+                .map((candidate) => (
+                  <button
+                    key={candidate.file_path}
+                    type="button"
+                    onClick={() => {
+                      const dur = Math.max(candidate.duration_sec || 1, 0.2);
+                      setMergeItems((prev) => [
+                        ...prev,
+                        {
+                          uid: `${candidate.file_path}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                          clip: candidate,
+                          start_sec: 0,
+                          end_sec: Number(dur.toFixed(2)),
+                        },
+                      ]);
+                      setMergeModalOpen(false);
+                    }}
+                    className="flex w-full items-center justify-between gap-3 rounded-xl bg-white/[0.03] px-3 py-2 text-left ring-1 ring-white/[0.05] transition hover:bg-[rgb(var(--accent-rgb)/0.14)] hover:ring-[rgb(var(--accent-rgb)/0.4)]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-semibold text-white">
+                        {candidate.title}
+                      </div>
+                      <div className="truncate text-[11px] text-slate-400">
+                        {candidate.game_name} • {candidate.width}x
+                        {candidate.height} •{" "}
+                        {formatTimePrecise(candidate.duration_sec)}
+                      </div>
+                    </div>
+                    <Plus className="h-4 w-4 shrink-0 text-[var(--accent-hover)]" />
+                  </button>
+                ))}
+              {allClips.length === 0 && (
+                <div className="py-8 text-center text-xs text-slate-500">
+                  {t.editor.mergeEmptyAvailable}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
