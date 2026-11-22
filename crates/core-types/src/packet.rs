@@ -32,6 +32,8 @@ pub enum TrackKind {
     AudioMic,
     /// Optional secondary WASAPI output loopback (e.g., Discord/Voicemod) (`tkhd flags = 0x02`, MP4 Track 5).
     AudioSecondary,
+    /// Dynamic per-application WASAPI process loopback stem (`tkhd flags = 0x02`, MP4 Track 6+).
+    AudioApp(u8),
 }
 
 impl TrackKind {
@@ -44,6 +46,7 @@ impl TrackKind {
             Self::AudioGame => 3,
             Self::AudioMic => 4,
             Self::AudioSecondary => 5,
+            Self::AudioApp(idx) => 6 + (idx as u32),
         }
     }
 
@@ -52,7 +55,11 @@ impl TrackKind {
     pub const fn is_audio(self) -> bool {
         matches!(
             self,
-            Self::AudioMixed | Self::AudioGame | Self::AudioMic | Self::AudioSecondary
+            Self::AudioMixed
+                | Self::AudioGame
+                | Self::AudioMic
+                | Self::AudioSecondary
+                | Self::AudioApp(_)
         )
     }
 }
@@ -116,6 +123,9 @@ pub struct StreamHeaders {
     pub audio_game: Option<AudioStreamHeader>,
     pub audio_mic: Option<AudioStreamHeader>,
     pub audio_secondary: Option<AudioStreamHeader>,
+    /// Dynamic per-application audio track headers `(slot_idx, display_label, header)`.
+    #[serde(default)]
+    pub app_audio: Vec<(u8, String, AudioStreamHeader)>,
 }
 
 /// Compressed encoded packet fanned out by `PacketRouter` via cheap `Arc<[u8]>` reference counting.

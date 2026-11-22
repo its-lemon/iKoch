@@ -15,10 +15,21 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tracing::{debug, warn};
 
-static PRESET_CHIME_WAV: &[u8] = include_bytes!("../assets/chime.wav");
-static PRESET_START_WAV: &[u8] = include_bytes!("../assets/start.wav");
-static PRESET_STOP_WAV: &[u8] = include_bytes!("../assets/stop.wav");
-static PRESET_TICK_WAV: &[u8] = include_bytes!("../assets/tick.wav");
+static PRESET_CLIP_CRYSTAL_WAV: &[u8] = include_bytes!("../assets/clip_crystal.wav");
+static PRESET_CLIP_MEDAL_WAV: &[u8] = include_bytes!("../assets/clip_medal.wav");
+static PRESET_CLIP_BELL_WAV: &[u8] = include_bytes!("../assets/clip_bell.wav");
+static PRESET_CLIP_STUDIO_WAV: &[u8] = include_bytes!("../assets/clip_studio.wav");
+
+static PRESET_START_DOUBLE_WAV: &[u8] = include_bytes!("../assets/start_double.wav");
+static PRESET_STOP_DOUBLE_WAV: &[u8] = include_bytes!("../assets/stop_double.wav");
+static PRESET_START_SYNTH_WAV: &[u8] = include_bytes!("../assets/start_synth.wav");
+static PRESET_STOP_SYNTH_WAV: &[u8] = include_bytes!("../assets/stop_synth.wav");
+static PRESET_START_CLICK_WAV: &[u8] = include_bytes!("../assets/start_click.wav");
+static PRESET_STOP_CLICK_WAV: &[u8] = include_bytes!("../assets/stop_click.wav");
+
+static PRESET_MARKER_TICK_WAV: &[u8] = include_bytes!("../assets/marker_tick.wav");
+static PRESET_MARKER_WOOD_WAV: &[u8] = include_bytes!("../assets/marker_wood.wav");
+static PRESET_MARKER_PULSE_WAV: &[u8] = include_bytes!("../assets/marker_pulse.wav");
 
 enum SoundCommand {
     Play {
@@ -105,10 +116,20 @@ fn entry_for_kind(
 
 fn preset_bytes(name: &str) -> &'static [u8] {
     match name.trim().to_ascii_lowercase().as_str() {
-        "start" => PRESET_START_WAV,
-        "stop" => PRESET_STOP_WAV,
-        "tick" => PRESET_TICK_WAV,
-        _ => PRESET_CHIME_WAV,
+        "clip_crystal" | "chime" => PRESET_CLIP_CRYSTAL_WAV,
+        "clip_medal" => PRESET_CLIP_MEDAL_WAV,
+        "clip_bell" => PRESET_CLIP_BELL_WAV,
+        "clip_studio" => PRESET_CLIP_STUDIO_WAV,
+        "start_double" | "start" => PRESET_START_DOUBLE_WAV,
+        "stop_double" | "stop" => PRESET_STOP_DOUBLE_WAV,
+        "start_synth" => PRESET_START_SYNTH_WAV,
+        "stop_synth" => PRESET_STOP_SYNTH_WAV,
+        "start_click" => PRESET_START_CLICK_WAV,
+        "stop_click" => PRESET_STOP_CLICK_WAV,
+        "marker_tick" | "tick" => PRESET_MARKER_TICK_WAV,
+        "marker_wood" => PRESET_MARKER_WOOD_WAV,
+        "marker_pulse" => PRESET_MARKER_PULSE_WAV,
+        _ => PRESET_CLIP_CRYSTAL_WAV,
     }
 }
 
@@ -163,7 +184,7 @@ fn play_source_on_sink(
                     "Custom sound '{}' failed ({err}); falling back to chime preset",
                     path.display()
                 );
-                let dec = Decoder::try_from(Cursor::new(PRESET_CHIME_WAV))
+                let dec = Decoder::try_from(Cursor::new(PRESET_CLIP_CRYSTAL_WAV))
                     .map_err(|e| format!("Fallback chime decode failed: {e}"))?;
                 player.append(dec.amplify(gain));
             }
@@ -180,13 +201,22 @@ fn append_custom_file(player: &Player, path: &PathBuf, gain: f32) -> Result<(), 
     Ok(())
 }
 
-/// Validates that all four built-in WAV presets decode cleanly via `rodio::Decoder`.
+/// Validates that all built-in WAV presets decode cleanly via `rodio::Decoder`.
 pub fn verify_embedded_presets_decode() -> Result<(), String> {
     for (name, bytes) in [
-        ("chime", PRESET_CHIME_WAV),
-        ("start", PRESET_START_WAV),
-        ("stop", PRESET_STOP_WAV),
-        ("tick", PRESET_TICK_WAV),
+        ("clip_crystal", PRESET_CLIP_CRYSTAL_WAV),
+        ("clip_medal", PRESET_CLIP_MEDAL_WAV),
+        ("clip_bell", PRESET_CLIP_BELL_WAV),
+        ("clip_studio", PRESET_CLIP_STUDIO_WAV),
+        ("start_double", PRESET_START_DOUBLE_WAV),
+        ("stop_double", PRESET_STOP_DOUBLE_WAV),
+        ("start_synth", PRESET_START_SYNTH_WAV),
+        ("stop_synth", PRESET_STOP_SYNTH_WAV),
+        ("start_click", PRESET_START_CLICK_WAV),
+        ("stop_click", PRESET_STOP_CLICK_WAV),
+        ("marker_tick", PRESET_MARKER_TICK_WAV),
+        ("marker_wood", PRESET_MARKER_WOOD_WAV),
+        ("marker_pulse", PRESET_MARKER_PULSE_WAV),
     ] {
         let dec = Decoder::try_from(Cursor::new(bytes))
             .map_err(|e| format!("Embedded preset '{name}' failed rodio decode: {e}"))?;

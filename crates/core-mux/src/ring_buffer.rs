@@ -20,6 +20,7 @@ struct CachedAudioHeaders {
     game: Option<AudioStreamHeader>,
     mic: Option<AudioStreamHeader>,
     secondary: Option<AudioStreamHeader>,
+    app_audio: Vec<(u8, String, AudioStreamHeader)>,
 }
 
 /// Compressed circular buffer preserving stream headers (`SPS`/`PPS`/`ASC`) and evicting
@@ -80,6 +81,11 @@ impl GopRingBuffer {
         } else {
             headers.audio_secondary = self.cached_audio.secondary.clone();
         }
+        if !headers.app_audio.is_empty() {
+            self.cached_audio.app_audio = headers.app_audio.clone();
+        } else {
+            headers.app_audio = self.cached_audio.app_audio.clone();
+        }
         self.headers = Some(headers);
     }
 
@@ -91,6 +97,7 @@ impl GopRingBuffer {
             audio_game: self.cached_audio.game.clone(),
             audio_mic: self.cached_audio.mic.clone(),
             audio_secondary: self.cached_audio.secondary.clone(),
+            app_audio: self.cached_audio.app_audio.clone(),
         });
     }
 
@@ -104,6 +111,14 @@ impl GopRingBuffer {
     /// resolution while preserving active audio stream headers.
     pub fn reset_for_new_source(&mut self) {
         self.headers = None;
+        self.gops.clear();
+        self.total_bytes = 0;
+        self.latest_pts_us = None;
+    }
+
+    /// Clears buffered GOPs while preserving active video and audio stream headers
+    /// so the replay window restarts cleanly at `0s` on the next IDR keyframe.
+    pub fn clear_keep_headers(&mut self) {
         self.gops.clear();
         self.total_bytes = 0;
         self.latest_pts_us = None;

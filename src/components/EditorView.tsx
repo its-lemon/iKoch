@@ -38,6 +38,7 @@ import {
   formatBytes,
   formatTimePrecise,
   trackDisplayName,
+  trackKindKey,
 } from "../utils/format";
 import { sliderFillStyle } from "./AccentSlider";
 import { TimelinePanel } from "./TimelinePanel";
@@ -349,7 +350,11 @@ export function EditorView({
             source.connect(gain);
             gain.connect(ctx.destination);
 
-            stemNodesRef.current.set(wf.kind, { audio, gain, source });
+            stemNodesRef.current.set(trackKindKey(wf.kind), {
+              audio,
+              gain,
+              source,
+            });
           }
 
           await Promise.all(readyPromises);
@@ -396,7 +401,7 @@ export function EditorView({
   // Apply live track volume (0..200%) & mute + masterVolume directly to Web Audio GainNodes.
   useEffect(() => {
     for (const mix of trackMix) {
-      const node = stemNodesRef.current.get(mix.kind);
+      const node = stemNodesRef.current.get(trackKindKey(mix.kind));
       if (node) {
         node.gain.gain.value = mix.muted
           ? 0
@@ -683,7 +688,8 @@ export function EditorView({
 
   const liveLevelForTrack = (kind: TrackKind, volume: number, muted: boolean) => {
     if (muted || !prepared) return 0;
-    const wf = prepared.waveforms.find((w) => w.kind === kind);
+    const key = trackKindKey(kind);
+    const wf = prepared.waveforms.find((w) => trackKindKey(w.kind) === key);
     if (!wf || wf.peaks.length === 0) return 0;
     const frac = Math.min(0.999, Math.max(0, currentTime / Math.max(durationSec, 0.1)));
     const idx = Math.floor(frac * wf.peaks.length);
@@ -763,6 +769,7 @@ export function EditorView({
           : "keep_separate_tracks") as "mix_to_single_track" | "keep_separate_tracks",
         game_volume: gameTrack && !gameTrack.muted ? gameTrack.volume : 0,
         mic_volume: micTrack && !micTrack.muted ? micTrack.volume : 0,
+        track_mix: toTrackMixSpec(),
       };
       let outPath: string;
       if (replaceOriginal) {
@@ -818,6 +825,7 @@ export function EditorView({
           mix_audio_tracks: true,
           game_volume: gameTrack && !gameTrack.muted ? gameTrack.volume : 0,
           mic_volume: micTrack && !micTrack.muted ? micTrack.volume : 0,
+          track_mix: toTrackMixSpec(),
         },
         durationSec
       );
@@ -1151,9 +1159,10 @@ export function EditorView({
                             ? "bg-violet-400"
                             : "bg-sky-400";
 
+                      const tKey = trackKindKey(track.kind);
                       return (
                         <div
-                          key={track.kind}
+                          key={tKey}
                           className="relative flex items-center gap-1.5 overflow-hidden rounded-lg bg-white/[0.05] px-2 py-1"
                           title={`${trackDisplayName(track.kind, track.label, lang)}: ${
                             track.muted
@@ -1166,7 +1175,7 @@ export function EditorView({
                             onClick={() =>
                               setTrackMix((prev) =>
                                 prev.map((tr) =>
-                                  tr.kind === track.kind
+                                  trackKindKey(tr.kind) === tKey
                                     ? { ...tr, muted: !tr.muted }
                                     : tr
                                 )
@@ -1203,7 +1212,7 @@ export function EditorView({
                               const v = Number(e.target.value);
                               setTrackMix((prev) =>
                                 prev.map((tr) =>
-                                  tr.kind === track.kind
+                                  trackKindKey(tr.kind) === tKey
                                     ? { ...tr, volume: v }
                                     : tr
                                 )

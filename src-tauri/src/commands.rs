@@ -8,12 +8,13 @@ use crate::ffmpeg_editor::{
 };
 use crate::state::{allow_directory_in_asset_scope, AppState};
 use crate::webhook::send_file_to_discord_webhook;
-use core_audio::{enumerate_capture_devices, enumerate_render_devices};
+use core_audio::{enumerate_active_audio_apps, enumerate_capture_devices, enumerate_render_devices};
 use core_capture::{enumerate_monitors, enumerate_windows};
 use core_types::{
-    AdvancedExportRequest, AppSettings, AudioDeviceInfo, CaptureTarget, ClipMetadata,
-    DaemonStateSnapshot, DiscordCompressRequest, EditorCacheStats, FrameScreenshotRequest,
-    GalleryFilter, MonitorInfo, RecorderCommand, SoundNotificationKind, TrimRequest, WindowInfo,
+    ActiveAudioAppInfo, AdvancedExportRequest, AppSettings, AudioDeviceInfo, CaptureTarget,
+    ClipMetadata, DaemonStateSnapshot, DiscordCompressRequest, EditorCacheStats,
+    FrameScreenshotRequest, GalleryFilter, MonitorInfo, RecorderCommand, SoundNotificationKind,
+    TrimRequest, WindowInfo,
 };
 use recorder_daemon::{
     cleanup_temp_dir, list_clip_metadata, load_clip_metadata, measure_editor_cache,
@@ -86,6 +87,11 @@ pub fn list_audio_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 #[tauri::command]
 pub fn list_audio_input_devices() -> Result<Vec<AudioDeviceInfo>, String> {
     enumerate_capture_devices().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_active_audio_apps() -> Result<Vec<ActiveAudioAppInfo>, String> {
+    enumerate_active_audio_apps().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -374,4 +380,63 @@ pub fn get_editor_cache_stats(state: State<'_, AppState>) -> EditorCacheStats {
 pub fn clear_editor_cache_now(state: State<'_, AppState>) -> (usize, u64) {
     let temp_dir = state.current_settings().storage.temp_dir;
     cleanup_temp_dir(&temp_dir)
+}
+
+#[tauri::command]
+pub async fn pick_audio_file() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.OpenFileDialog
+$dlg.Title = 'Select Notification Sound'
+$dlg.Filter = 'Audio Files (*.wav;*.mp3;*.ogg;*.flac)|*.wav;*.mp3;*.ogg;*.flac|All Files (*.*)|*.*'
+$dlg.Multiselect = $false
+if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    Write-Output $dlg.FileName
+}
+"#;
+        let out = Command::new("powershell")
+            .creation_flags(0x0800_0000)
+            .args(["-NoProfile", "-STA", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to open file dialog: {e}"))?;
+        if !out.status.success() {
+            return Ok(None);
+        }
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    })
+    .await
+    .map_err(|e| format!("Join error: {e}"))?
+}
+
+#[tauri::command]
+pub async fn check_for_updates() -> Result<crate::updater::UpdateInfo, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::updater::check_for_updates(env!("CARGO_PKG_VERSION"))
+    })
+    .await
+    .map_err(|e| format!("Join error: {e}"))?
+}
+
+#[tauri::command]
+pub async fn download_and_install_update(
+    app: AppHandle,
+    download_url: String,
+    installer_name: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::updater::download_and_install_update(
+            &app,
+            &download_url,
+            installer_name.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("Join error: {e}"))?
 }

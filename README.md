@@ -5,7 +5,7 @@
 **Lightweight Windows game & screen replay recorder and built-in clip editor**  
 **Лёгкий рекордер откатов и сессий для Windows со встроенным видеоредактором**
 
-[![Release](https://img.shields.io/badge/version-v0.1.3-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
+[![Release](https://img.shields.io/badge/version-v0.2.0-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![Stack](https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri%20v2%20%2B%20React-orange?style=flat-square)](#build-from-source)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](Cargo.toml)
@@ -25,12 +25,13 @@
 </p>
 
 ### ✨ Key Features
-- **Instant Replay Buffer (`F9`)** — always-on circular RAM buffer (15–300s) saving along clean IDR keyframe boundaries.
+- **Instant Replay Buffer (`F9`)** — always-on circular RAM buffer (15–300s) saving along clean IDR keyframe boundaries, with optional **Reset buffer after clip** so the next clip never repeats already-saved moments.
 - **Full Session Recording (`F10`)** — crash-safe fragmented MP4 recording with automatic `faststart` remuxing.
 - **Auto Game Detection** — automatically detects launched games, pauses when unfocused/minimized, or captures a chosen monitor/window.
-- **Multi-Track WASAPI Audio** — records `Mixed Audio` (default playback track) + separate `Game`, `Microphone` (with **RNNoise**, **Noise Gate**, **Soft Limiter**, Push-to-Talk), and optional `Secondary` tracks.
-- **Built-in Clip Editor** — lossless trim (replace original or save as new), multi-clip merge, playback speed (`0.25x–4.0x`), per-track volume mixer, Discord size presets (`10 MB` / `50 MB` / custom), `Ctrl+V` file copy (`CF_HDROP`).
-- **Themes & Bilingual UI** — `EN` / `RU` interface, 8 built-in themes + live Custom Theme Builder.
+- **Per-App Audio Separation & Multi-Track WASAPI** — records `Mixed Audio` (default playback track) + separate `Game`, `Microphone` (**RNNoise**, **Noise Gate**, **Soft Limiter**, Push-to-Talk), optional `Secondary`, and custom **Per-App Audio Channels** (e.g., *Discord*, *Spotify*, browsers — lazily captured only while the target app is running).
+- **Built-in Clip Editor** — lossless trim (with **Save as New** or **Replace Original**), multi-clip merge, playback speed (`0.25x–4.0x`), dynamic per-track volume mixer (`0–200%` + `Mute`), Discord size presets (`10 MB` / `50 MB` / custom), `Ctrl+V` file copy (`CF_HDROP`).
+- **Themes, Tooltips & Bilingual UI** — `EN` / `RU` interface, 8 built-in themes + live Custom Theme Builder, and interactive `(?)` tooltips across Settings.
+- **GitHub Releases Auto-Updater** — check for new versions on startup or manually in Settings, view release notes, and download + launch the Windows installer in one click.
 - **Zero-RAM Tray Background** — closing the window destroys the WebView2 UI process while keeping the Rust recording daemon alive in the system tray.
 
 ### 📁 Organized Media Folders
@@ -46,8 +47,8 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
 |---|---|
 | `F9` | Save instant replay clip |
 | `F10` | Start / stop full session recording |
-| `F7` | Add bookmark marker |
-| `F6` | Mute / unmute microphone |
+| `F8` | Add bookmark marker |
+| `Ctrl+Shift+M` | Mute / unmute microphone |
 | `Ctrl+Shift+P` | Toggle Privacy Mode (pauses capture & clears buffer) |
 
 ### 🛠 Build from Source
@@ -70,12 +71,13 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
 </p>
 
 ### ✨ Основные возможности
-- **Мгновенный откат (`F9`)** — кольцевой буфер в ОЗУ (15–300 сек), сохраняющий клип ровно по ключевым кадрам (IDR).
+- **Мгновенный откат (`F9`)** — кольцевой буфер в ОЗУ (15–300 сек), сохраняющий клип ровно по ключевым кадрам (IDR), с опцией **очистки буфера после клипа** (следующий откат не повторяет уже сохранённые моменты).
 - **Полная запись сессий (`F10`)** — отказоустойчивая запись в `.fmp4` с автоматическим ремуксом в `faststart` MP4.
 - **Автоопределение игр** — сам находит запущенную игру, ставит запись на паузу при сворачивании (Alt+Tab) или захватывает выбранный монитор/окно.
-- **Многодорожечный звук (WASAPI)** — итоговый микс (`Mixed Audio`) + отдельные дорожки `Игра`, `Микрофон` (**RNNoise**, **Noise Gate**, **Soft Limiter**, Push-to-Talk) и дополнительный источник.
-- **Встроенный редактор** — быстрая обрезка (с заменой оригинала или сохранением в `Edited/`), склейка нескольких клипов, скорость (`0.25x–4.0x`), микшер громкости дорожек, сжатие под Discord (`10 МБ` / `50 МБ` / свой размер), копирование файла в буфер (`Ctrl+V`).
-- **Темы и языки** — русский и английский интерфейс, 8 готовых тем + конструктор своей темы в реальном времени.
+- **Разделение звука по приложениям и многодорожечный WASAPI** — итоговый микс (`Mixed Audio`) + отдельные дорожки `Игра`, `Микрофон` (**RNNoise**, **Noise Gate**, **Soft Limiter**, Push-to-Talk), дополнительный источник и пользовательские **каналы приложений** (*Discord*, *Spotify*, браузер — ленивый перехват запускается только пока процесс активен).
+- **Встроенный редактор** — быстрая обрезка (с заменой оригинала или сохранением в `Edited/`), склейка нескольких клипов, скорость (`0.25x–4.0x`), динамический микшер громкости всех дорожек (`0–200%` + `Mute`), сжатие под Discord (`10 МБ` / `50 МБ` / свой размер), копирование файла в буфер (`Ctrl+V`).
+- **Темы, подсказки `(?)` и языки** — русский и английский интерфейс, 8 готовых тем + конструктор своей темы в реальном времени и подробные подсказки `(?)` по всем настройкам.
+- **Автообновление через GitHub Releases** — проверка обновлений при запуске или по кнопке в Настройках, просмотр чейнджлога и установка в один клик.
 - **Фоновый режим без расхода ОЗУ** — при закрытии окна процесс WebView2 выгружается полностью, а лёгкий демон записи продолжает работать в системном трее.
 
 ### 📁 Порядок в папке с видео
@@ -91,8 +93,8 @@ Metadata (`.json`), thumbnails (`.jpg`), temporary stems (`.tmp`), and logs are 
 |---|---|
 | `F9` | Сохранить мгновенный клип (откат) |
 | `F10` | Начать / остановить запись сессии |
-| `F7` | Поставить закладку (маркер) |
-| `F6` | Включить / выключить микрофон |
+| `F8` | Поставить закладку (маркер) |
+| `Ctrl+Shift+M` | Включить / выключить микрофон |
 | `Ctrl+Shift+P` | Режим приватности (пауза захвата и очистка буфера) |
 
 ### 🛠 Сборка из исходников

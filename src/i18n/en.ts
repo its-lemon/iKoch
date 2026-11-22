@@ -387,12 +387,30 @@ export const en: Translations = {
     soundPresetOpt: "Built-in preset",
     soundCustomOpt: "Custom audio file",
     soundSilentOpt: "Silent",
-    presetChime: "Chime (Clip)",
-    presetStart: "Start (Record)",
-    presetStop: "Stop (Save)",
-    presetTick: "Tick (Bookmark)",
+    presetChime: "Crystal Chime",
+    presetStart: "Double Up",
+    presetStop: "Double Down",
+    presetTick: "Soft Tick",
+    presetClipCrystal: "Crystal Chime (Soft Chord)",
+    presetClipMedal: "Medal Pop (Crisp Game Pop)",
+    presetClipBell: "Soft Bell (Warm Chime)",
+    presetClipStudio: "Studio Ding (Minimal)",
+    presetStartDouble: "Double Up (Rising)",
+    presetStartSynth: "Warm Synth Up",
+    presetStartClick: "Clean Click Up",
+    presetStopDouble: "Double Down (Falling)",
+    presetStopSynth: "Warm Synth Down",
+    presetStopClick: "Clean Click Down",
+    presetMarkerTick: "Soft Tick",
+    presetMarkerWood: "Woodblock",
+    presetMarkerPulse: "Pulse (Double Tap)",
+    browseSoundFileBtn: "Browse...",
     testSoundBtn: "Test",
     testSoundError: "Sound test failed",
+
+    resetBufferOnClipLabel: "Reset RAM buffer after saving clip",
+    resetBufferOnClipHint:
+      "Clears the replay buffer after F9 so the next clip starts fresh from 0s without repeating already saved footage",
 
     languageTitle: "Interface Language / Язык",
     languageHint:
@@ -406,9 +424,24 @@ export const en: Translations = {
     customThemeDesc: "Customize palette colors with real-time preview",
     customThemeReset: "Reset",
     colorBgApp: "App Background",
+    colorBgSidebar: "Sidebar",
     colorBgPanel: "Panels & Cards",
+    colorBorder: "Borders & Outlines",
     colorAccent: "Accent Color",
-    colorTextPrimary: "Text Color",
+    colorTextPrimary: "Primary Text",
+    colorTextSecondary: "Secondary Text",
+    uiCustomTitle: "Interface & Card Customization",
+    cornerRadiusLabel: "Corner Roundness",
+    radiusSharp: "Sharp",
+    radiusMedium: "Medium",
+    radiusSoft: "Soft",
+    densityLabel: "Interface Density",
+    densityCompact: "Compact",
+    densityNormal: "Normal",
+    glassPanelsLabel: "Glass / Translucent Panels",
+    glassPanelsHint: "Adds subtle backdrop blur to panels and sidebars",
+    showCardSpecsLabel: "Show FPS & resolution on Library cards",
+    showCardSpecsHint: "Displays 1920x1080 • 60 fps over card thumbnails",
     systemTitle: "System & Startup",
     autostartLabel: "Launch with Windows (minimized to tray)",
     autostartHint:
@@ -464,5 +497,96 @@ export const en: Translations = {
     diskCleanedMsg: (n: number, size: string) =>
       `Removed ${n} file(s), freed ${size}`,
     diskCleanError: "Disk cleanup error",
+
+    tips: {
+      captureSource:
+        "Choose what to capture: 'Auto (Game)' tracks launched games automatically; 'Monitor' captures the entire screen; 'Window' locks onto one app.",
+      hdr: "Auto Tone-Map converts HDR games into clean SDR without blown-out highlights. Pick Preserve HDR10 only with HEVC and an HDR display.",
+      resolution:
+        "Native keeps full sharpness. 1080p or 720p reduces GPU encoder load and file size when gaming at 1440p/4K.",
+      fps: "60 FPS is the sweet spot for smooth clips. 30 FPS halves file size; 120 FPS needs more GPU headroom and produces larger files.",
+      videoCodec:
+        "H.264 plays everywhere (Discord, browsers, Telegram). HEVC/AV1 compress better at the same bitrate, though browser playback varies.",
+      gpuEncoder:
+        "'Auto' uses your GPU hardware encoder (NVENC/AMF/QSV) with near-zero FPS impact. Software mode uses CPU.",
+      rateControl:
+        "VBR adapts bitrate to scene motion and saves space. CBR keeps a constant bitrate, while CQP targets fixed visual quality.",
+      bitrate:
+        "Higher bitrate improves motion clarity at the cost of larger files and more RAM. 12–20 Mbps is ideal for 1080p60.",
+      replayEnabled:
+        "Continuously keeps the last N seconds in RAM so you can save a clip anytime with F9.",
+      replayDuration:
+        "How many seconds are saved when pressing F9. Longer buffers proportionally increase RAM usage.",
+      replayRam:
+        "Hard RAM cap for the compressed replay buffer. 512 MB easily covers 60–120s at 1080p60.",
+      resetBufferOnClip:
+        "Clears the RAM buffer right after saving a clip so the next replay starts at 0s without duplicating already saved moments.",
+      autoGame:
+        "Automatically starts buffering when a game launches and pauses when you Alt+Tab to the desktop.",
+      captureCursor:
+        "Includes your mouse cursor in recordings. Helpful for desktop/strategy games, optional for shooters.",
+      captureBorder:
+        "Controls the yellow Windows 10/11 capture indicator border around the captured window (can be hidden on Win11).",
+      autoPauseDelay:
+        "Grace period before pausing capture after Alt+Tab — prevents unnecessary restarts during quick tab-outs.",
+      builtinGames:
+        "Uses the built-in database of popular games (CS2, Dota 2, Valorant, etc.) for instant detection.",
+      whitelist:
+        "Processes always treated as games even when running in windowed mode.",
+      blacklist:
+        "Processes (browsers, launchers, chat apps) that will never trigger Auto Game capture.",
+      gameAudio:
+        "System/game audio source (Track 2). 'Game Process Audio Only' isolates the game from Discord and browsers (Win10/11).",
+      secondaryAudio:
+        "Optional extra output channel (Track 4), such as a virtual cable for Discord or Voicemod.",
+      micDevice:
+        "Microphone recorded to its own stem (Track 3) so you can adjust voice volume independently in the Editor.",
+      separateTracks:
+        "Saves both a ready-to-play mixed track (Track 1) and separate Game/Mic stems inside the MP4.",
+      volumes:
+        "Controls the mix balance written into Track 1 (played by default in Discord and media players).",
+      rnnoise:
+        "Neural noise suppression (RNNoise) removes keyboard clicks, fan hum, and static from your microphone only.",
+      noiseGate:
+        "Silences the microphone below the dBFS threshold and opens smoothly when you speak.",
+      micActivation:
+        "Always Active records mic continuously; Push-to-Talk records only while held; Push-to-Mute mutes while held.",
+      toastOverlay:
+        "Shows a lightweight click-through toast in the corner of your screen when saving clips or starting a session.",
+      soundMaster:
+        "Master volume for all iKoch audio cues (clip saved, start/stop recording, bookmark added).",
+      soundEvents:
+        "Pick a curated multi-tone preset per event or attach any custom .wav/.mp3/.ogg file using Browse.",
+      hotkeys:
+        "Global shortcuts work over fullscreen games. Click Bind and press your desired key combination.",
+      editorCache:
+        "Temporary audio stems (.m4a) speed up reopening clips in the Editor. Bookmarks, favorites, and thumbnails stay safe.",
+      storagePaths:
+        "Configures where Clips/, Edited/, and Sessions/ are stored along with disk cleanup limits (Favorites are protected).",
+      autoRemux:
+        "Converts crash-safe fMP4 sessions into faststart MP4s so they start playing instantly in Discord and browsers.",
+      autostart:
+        "Starts iKoch automatically with Windows, minimized to the system tray.",
+      appChannels:
+        "Separates selected apps (Discord, Spotify, browser) into their own MP4 audio stems. Idle apps consume 0 threads and 0 MB RAM until launched.",
+      updates:
+        "Checks GitHub Releases for newer iKoch versions and downloads + launches the Windows installer in one click.",
+    },
+    updatesTitle: "Updates (GitHub Releases)",
+    currentVersionLabel: "Current version",
+    autoCheckUpdates: "Check for updates on startup",
+    checkUpdatesBtn: "Check for Updates",
+    checkingUpdates: "Checking...",
+    upToDate: "You are on the latest version",
+    updateAvailable: "Update available",
+    downloadInstallBtn: "Download & Install",
+    installingUpdate: "Downloading installer...",
+    releaseNotesLabel: "Release notes",
+    appChannelsTitle: "Per-App Audio Separation",
+    appChannelsAdd: "Add channel",
+    appChannelsProcesses: "Processes (.exe comma-separated)",
+    appChannelsPickRunning: "Pick running app",
+    appChannelsNoRunning: "No active audio apps found",
+    appChannelsRemove: "Remove",
   },
 };

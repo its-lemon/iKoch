@@ -52,6 +52,8 @@ pub struct PacketRouter {
     audio_game_header: Option<AudioStreamHeader>,
     audio_mic_header: Option<AudioStreamHeader>,
     audio_secondary_header: Option<AudioStreamHeader>,
+    app_audio_headers: Vec<(u8, String, AudioStreamHeader)>,
+    app_audio_labels: Vec<(u8, String)>,
     headers: Option<StreamHeaders>,
     disk_tx: Sender<DiskTaskCmd>,
     disk_thread: Option<JoinHandle<()>>,
@@ -84,6 +86,8 @@ impl PacketRouter {
             audio_game_header: None,
             audio_mic_header: None,
             audio_secondary_header: None,
+            app_audio_headers: Vec::new(),
+            app_audio_labels: Vec::new(),
             headers: None,
             disk_tx,
             disk_thread: Some(disk_thread),
@@ -102,8 +106,20 @@ impl PacketRouter {
         self.audio_game_header = headers.audio_game.clone();
         self.audio_mic_header = headers.audio_mic.clone();
         self.audio_secondary_header = headers.audio_secondary.clone();
+        self.app_audio_headers = headers.app_audio.clone();
         self.headers = Some(headers.clone());
         self.ring_buffer.lock().set_headers(headers);
+    }
+
+    /// Sets human-readable labels for dynamic per-application audio slots.
+    pub fn set_app_audio_labels(&mut self, labels: Vec<(u8, String)>) {
+        self.app_audio_labels = labels;
+        for (idx, lbl, _) in &mut self.app_audio_headers {
+            if let Some((_, new_lbl)) = self.app_audio_labels.iter().find(|(s, _)| s == idx) {
+                *lbl = new_lbl.clone();
+            }
+        }
+        self.sync_combined_headers();
     }
 
     /// Registers or refreshes the video stream header independently of audio headers.
@@ -112,13 +128,29 @@ impl PacketRouter {
         self.sync_combined_headers();
     }
 
-    /// Registers or refreshes an audio track header (`AudioMixed`, `AudioGame`, `AudioMic`, `AudioSecondary`).
+    /// Registers or refreshes an audio track header (`AudioMixed`, `AudioGame`, `AudioMic`, `AudioSecondary`, `AudioApp`).
     pub fn update_audio_header(&mut self, audio: AudioStreamHeader) {
         match audio.track {
             TrackKind::AudioMixed => self.audio_mixed_header = Some(audio),
             TrackKind::AudioGame => self.audio_game_header = Some(audio),
             TrackKind::AudioMic => self.audio_mic_header = Some(audio),
             TrackKind::AudioSecondary => self.audio_secondary_header = Some(audio),
+            TrackKind::AudioApp(idx) => {
+                let label = self
+                    .app_audio_labels
+                    .iter()
+                    .find(|(s, _)| *s == idx)
+                    .map(|(_, l)| l.clone())
+                    .unwrap_or_else(|| format!("App {}", idx + 1));
+                if let Some(existing) = self.app_audio_headers.iter_mut().find(|(s, _, _)| *s == idx)
+                {
+                    existing.1 = label;
+                    existing.2 = audio;
+                } else {
+                    self.app_audio_headers.push((idx, label, audio));
+                    self.app_audio_headers.sort_by_key(|(s, _, _)| *s);
+                }
+            }
             TrackKind::Video => return,
         }
         self.sync_combined_headers();
@@ -132,6 +164,7 @@ impl PacketRouter {
                 audio_game: self.audio_game_header.clone(),
                 audio_mic: self.audio_mic_header.clone(),
                 audio_secondary: self.audio_secondary_header.clone(),
+                app_audio: self.app_audio_headers.clone(),
             };
             self.headers = Some(combined.clone());
             self.ring_buffer.lock().set_headers(combined);
@@ -151,6 +184,11 @@ impl PacketRouter {
         self.video_header = None;
         self.headers = None;
         self.ring_buffer.lock().reset_for_new_source();
+    }
+
+    /// Clears buffered replay GOPs while preserving stream headers (`reset_buffer_on_clip`).
+    pub fn clear_replay_buffer(&mut self) {
+        self.ring_buffer.lock().clear_keep_headers();
     }
 
     /// Clears cached audio track headers before restarting the audio pipeline on bitrate/track changes.
@@ -216,7 +254,7 @@ impl PacketRouter {
                 TrackKind::AudioMixed => mixed_pkts += 1,
                 TrackKind::AudioGame => game_pkts += 1,
                 TrackKind::AudioMic => mic_pkts += 1,
-                TrackKind::AudioSecondary => sec_pkts += 1,
+                TrackKind::AudioSecondary | TrackKind::AudioApp(_) => sec_pkts += 1,
             }
         }
 

@@ -35,6 +35,21 @@ export interface AudioDeviceInfo {
   is_default: boolean;
 }
 
+export interface ActiveAudioAppInfo {
+  process_name: string;
+  display_name: string;
+  pid: number;
+}
+
+export interface AppAudioChannelConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  process_names: string[];
+  volume: number;
+  muted: boolean;
+}
+
 export type TrayIndicatorState = "idle" | "buffering" | "recording" | "error";
 
 export interface DetectedGameInfo {
@@ -157,12 +172,24 @@ export interface AudioSettings {
   channels: number;
   aac_bitrate_kbps: number;
   separate_tracks: boolean;
+  app_channels: AppAudioChannelConfig[];
+}
+
+export interface UpdateInfo {
+  has_update: boolean;
+  current_version: string;
+  latest_version: string;
+  release_notes: string;
+  download_url: string | null;
+  installer_name: string | null;
+  html_url: string;
 }
 
 export interface ReplayBufferSettings {
   enabled: boolean;
   duration_secs: number;
   max_ram_mb: number;
+  reset_buffer_on_clip: boolean;
 }
 
 export interface HotkeySettings {
@@ -213,9 +240,22 @@ export type AppTheme =
 
 export interface CustomThemeColors {
   bg_app: string;
+  bg_sidebar: string;
   bg_panel: string;
+  border_color: string;
   accent: string;
   text_primary: string;
+  text_secondary: string;
+}
+
+export type UiCornerRadius = "sharp" | "medium" | "soft";
+export type UiDensity = "compact" | "normal";
+
+export interface UiSettings {
+  corner_radius: UiCornerRadius;
+  density: UiDensity;
+  glass_panels: boolean;
+  show_card_specs: boolean;
 }
 
 export type CacheCleanupMode = "on_close" | "timer_and_limit" | "manual";
@@ -246,9 +286,11 @@ export interface StorageSettings {
 export interface AppSettings {
   schema_version: number;
   launch_at_startup: boolean;
+  check_updates_on_startup: boolean;
   language: AppLanguage;
   theme: AppTheme;
   custom_theme: CustomThemeColors;
+  ui: UiSettings;
   capture: CaptureSettings;
   video: VideoSettings;
   audio: AudioSettings;
@@ -281,7 +323,8 @@ export type TrackKind =
   | "audio_mixed"
   | "audio_game"
   | "audio_mic"
-  | "audio_secondary";
+  | "audio_secondary"
+  | { audio_app: number };
 
 export interface AudioTrackMetadata {
   track_index: number;
@@ -373,6 +416,7 @@ export interface TrimRequest {
   audio_mode: TrimAudioExportMode;
   game_volume: number;
   mic_volume: number;
+  track_mix?: TrackMixSpec[];
 }
 
 export type DiscordPreset =
@@ -391,6 +435,7 @@ export interface DiscordCompressRequest {
   mix_audio_tracks: boolean;
   game_volume: number;
   mic_volume: number;
+  track_mix?: TrackMixSpec[];
 }
 
 export interface SegmentRange {

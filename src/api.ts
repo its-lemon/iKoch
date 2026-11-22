@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
+  ActiveAudioAppInfo,
   AdvancedExportRequest,
   AppSettings,
   AudioDeviceInfo,
@@ -16,6 +17,7 @@ import type {
   RecorderCommand,
   SoundNotificationKind,
   TrimRequest,
+  UpdateInfo,
   WindowInfo,
 } from "./types";
 
@@ -130,4 +132,20 @@ export const api = {
 
   clearEditorCacheNow: () =>
     invoke<[number, number]>("clear_editor_cache_now"),
+
+  pickAudioFile: () => invoke<string | null>("pick_audio_file"),
+
+  listActiveAudioApps: () =>
+    invoke<ActiveAudioAppInfo[]>("list_active_audio_apps"),
+
+  checkForUpdates: () => invoke<UpdateInfo>("check_for_updates"),
+
+  downloadAndInstallUpdate: (
+    downloadUrl: string,
+    installerName?: string | null
+  ) =>
+    invoke<void>("download_and_install_update", {
+      downloadUrl,
+      installerName: installerName ?? null,
+    }),
 };

@@ -19,6 +19,7 @@ import type {
   DaemonStateSnapshot,
   MonitorInfo,
   RecorderEvent,
+  UiSettings,
   WindowInfo,
 } from "./types";
 import {
@@ -78,20 +79,22 @@ export function App() {
   const [previewTheme, setPreviewTheme] = useState<AppTheme | null>(null);
   const [previewCustomTheme, setPreviewCustomTheme] =
     useState<CustomThemeColors | null>(null);
+  const [previewUi, setPreviewUi] = useState<UiSettings | null>(null);
   const [previewLang, setPreviewLang] = useState<AppLanguage | null>(null);
 
   const activeTheme: AppTheme =
     previewTheme ?? settings?.theme ?? initialStored.theme;
   const activeCustomTheme: CustomThemeColors =
     previewCustomTheme ?? settings?.custom_theme ?? initialStored.custom;
+  const activeUi: UiSettings | undefined = previewUi ?? settings?.ui;
   const activeLanguage: AppLanguage =
     previewLang ?? settings?.language ?? loadStoredLanguage();
   const t = getTranslations(activeLanguage);
 
   useEffect(() => {
-    applyThemeToDocument(activeTheme, activeCustomTheme);
+    applyThemeToDocument(activeTheme, activeCustomTheme, activeUi);
     saveStoredTheme(activeTheme, activeCustomTheme);
-  }, [activeTheme, activeCustomTheme]);
+  }, [activeTheme, activeCustomTheme, activeUi]);
 
   useEffect(() => {
     saveStoredLanguage(activeLanguage);
@@ -179,6 +182,21 @@ export function App() {
         ]);
         setDaemon(st);
         setSettings(cfg);
+        if (cfg.check_updates_on_startup) {
+          void api
+            .checkForUpdates()
+            .then((info) => {
+              if (info.has_update) {
+                const tr = getTranslations(cfg.language);
+                notify(
+                  `${tr.settings.updateAvailable}: v${info.latest_version}`,
+                  tr.settings.updatesTitle,
+                  "info"
+                );
+              }
+            })
+            .catch(() => {});
+        }
       } catch (err) {
         notify(
           getTranslations(loadStoredLanguage()).app.initError,
@@ -340,6 +358,7 @@ export function App() {
     setSettings(saved);
     setPreviewTheme(null);
     setPreviewCustomTheme(null);
+    setPreviewUi(null);
     setPreviewLang(null);
     const snap = await api.getDaemonState();
     setDaemon(snap);
@@ -421,6 +440,7 @@ export function App() {
               <LibraryView
                 clips={clips}
                 loading={loadingClips}
+                showCardSpecs={activeUi?.show_card_specs ?? true}
                 persistedState={libraryState}
                 onPersistedStateChange={setLibraryState}
                 scrollTopRef={libraryScrollTopRef}
@@ -475,6 +495,7 @@ export function App() {
                 onSaveSettings={handleSaveSettings}
                 onPreviewTheme={setPreviewTheme}
                 onPreviewCustomTheme={setPreviewCustomTheme}
+                onPreviewUi={setPreviewUi}
                 onChangeLanguageInstant={(l) =>
                   void handleChangeLanguageInstant(l)
                 }

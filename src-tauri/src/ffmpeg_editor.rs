@@ -197,7 +197,8 @@ pub fn probe_media_streams(video_path: &Path) -> Result<ProbedMediaInfo, String>
 
 fn classify_probed_audio_stream(handler_name: Option<&str>, ordinal: usize) -> (TrackKind, String) {
     if let Some(name) = handler_name {
-        let lower = name.to_ascii_lowercase();
+        let trimmed = name.trim();
+        let lower = trimmed.to_ascii_lowercase();
         if lower.contains("mixed") {
             return (TrackKind::AudioMixed, "Mixed Audio".to_string());
         }
@@ -210,12 +211,20 @@ fn classify_probed_audio_stream(handler_name: Option<&str>, ordinal: usize) -> (
         if lower.contains("secondary") {
             return (TrackKind::AudioSecondary, "Secondary Audio".to_string());
         }
+        if !trimmed.is_empty() && lower != "soundhandler" {
+            let slot = ordinal.saturating_sub(3).min(255) as u8;
+            return (TrackKind::AudioApp(slot), trimmed.to_string());
+        }
     }
     match ordinal {
         0 => (TrackKind::AudioMixed, "Mixed Audio".to_string()),
         1 => (TrackKind::AudioGame, "Game Audio".to_string()),
         2 => (TrackKind::AudioMic, "Microphone".to_string()),
-        _ => (TrackKind::AudioSecondary, "Secondary Audio".to_string()),
+        3 => (TrackKind::AudioSecondary, "Secondary Audio".to_string()),
+        n => {
+            let slot = n.saturating_sub(3).min(255) as u8;
+            (TrackKind::AudioApp(slot), format!("App {}", slot + 1))
+        }
     }
 }
 
@@ -424,14 +433,34 @@ pub fn run_fast_trim(req: &TrimRequest) -> Result<PathBuf, String> {
             cmd.args(["-map", "0:v:0", "-map", &map_a, "-c", "copy", "-avoid_negative_ts", "make_zero"]);
         }
         TrimAudioExportMode::MixToSingleTrack => {
-            let game_ord = find_track_ordinal(&probed.audio_streams, TrackKind::AudioGame);
-            let mic_ord = find_track_ordinal(&probed.audio_streams, TrackKind::AudioMic);
-            if let (Some(g), Some(m)) = (game_ord, mic_ord) {
-                let gv = req.game_volume.clamp(0.0, 2.0);
-                let mv = req.mic_volume.clamp(0.0, 2.0);
-                let fc = format!(
-                    "[0:a:{g}]volume={gv:.3}[ag];[0:a:{m}]volume={mv:.3}[am];[ag][am]amix=inputs=2:duration=longest:normalize=0[aout]"
-                );
+            let active_mix = if !req.track_mix.is_empty() {
+                resolve_active_audio_mix(&req.track_mix, &probed.audio_streams)
+            } else {
+                let mut v = Vec::new();
+                if let Some(g) = find_track_ordinal(&probed.audio_streams, TrackKind::AudioGame) {
+                    v.push((g, req.game_volume.clamp(0.0, 2.0)));
+                }
+                if let Some(m) = find_track_ordinal(&probed.audio_streams, TrackKind::AudioMic) {
+                    v.push((m, req.mic_volume.clamp(0.0, 2.0)));
+                }
+                v
+            };
+
+            if active_mix.len() >= 2 {
+                let mut parts = Vec::with_capacity(active_mix.len() + 1);
+                let mut labels = String::new();
+                for (i, (ord, vol)) in active_mix.iter().enumerate() {
+                    parts.push(format!("[0:a:{ord}]volume={vol:.3}[a{i}]"));
+                    labels.push_str(&format!("[a{i}]"));
+                }
+                parts.push(format!(
+                    "{labels}amix=inputs={}:duration=longest:normalize=0[aout]",
+                    active_mix.len()
+                ));
+                let fc = parts.join(";");
+                cmd.args(["-filter_complex", &fc, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]);
+            } else if let Some((ord, vol)) = active_mix.first().copied() {
+                let fc = format!("[0:a:{ord}]volume={vol:.3}[aout]");
                 cmd.args(["-filter_complex", &fc, "-map", "0:v:0", "-map", "[aout]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"]);
             } else {
                 cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy"]);
@@ -473,18 +502,22 @@ pub fn run_discord_compress(
         text_overlays: Vec::new(),
         fade_in_sec: 0.0,
         fade_out_sec: 0.0,
-        track_mix: vec![
-            TrackMixSpec {
-                kind: TrackKind::AudioGame,
-                volume: req.game_volume,
-                muted: false,
-            },
-            TrackMixSpec {
-                kind: TrackKind::AudioMic,
-                volume: req.mic_volume,
-                muted: false,
-            },
-        ],
+        track_mix: if req.track_mix.is_empty() {
+            vec![
+                TrackMixSpec {
+                    kind: TrackKind::AudioGame,
+                    volume: req.game_volume,
+                    muted: false,
+                },
+                TrackMixSpec {
+                    kind: TrackKind::AudioMic,
+                    volume: req.mic_volume,
+                    muted: false,
+                },
+            ]
+        } else {
+            req.track_mix.clone()
+        },
         discord_preset: Some(req.preset),
         export_gif: false,
         subclip_from_session: false,
@@ -1404,6 +1437,7 @@ mod tests {
             audio_mode: TrimAudioExportMode::KeepSeparateTracks,
             game_volume: 1.0,
             mic_volume: 1.0,
+            track_mix: Vec::new(),
         })?;
         let trim_probed = probe_media_streams(&fast_trim_path)?;
         assert!(trim_probed.duration_sec > 0.5);
@@ -1422,6 +1456,7 @@ mod tests {
                 mix_audio_tracks: true,
                 game_volume: 1.0,
                 mic_volume: 1.0,
+                track_mix: Vec::new(),
             },
             prepared.probed.duration_sec,
         )?;

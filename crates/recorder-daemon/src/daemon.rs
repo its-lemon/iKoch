@@ -189,6 +189,7 @@ struct ActiveVideoCapture {
     handle: CaptureSessionHandle,
     encode_thread: Option<JoinHandle<()>>,
     stop_flag: Arc<AtomicBool>,
+    force_idr: Arc<AtomicBool>,
 }
 
 impl ActiveVideoCapture {
@@ -218,6 +219,8 @@ impl ActiveVideoCapture {
 
         let stop_flag = Arc::new(AtomicBool::new(false));
         let enc_stop = Arc::clone(&stop_flag);
+        let force_idr = Arc::new(AtomicBool::new(false));
+        let enc_force_idr = Arc::clone(&force_idr);
         let enc_cfg_template = MfVideoEncoderConfig {
             codec: settings.video.codec,
             vendor: settings.video.gpu_vendor,
@@ -239,6 +242,7 @@ impl ActiveVideoCapture {
                     frame_rx,
                     pipe_tx,
                     enc_stop,
+                    enc_force_idr,
                 );
             })
             .map_err(|e| format!("Spawn daemon video encoder failed: {e}"))?;
@@ -247,7 +251,12 @@ impl ActiveVideoCapture {
             handle,
             encode_thread: Some(encode_thread),
             stop_flag,
+            force_idr,
         })
+    }
+
+    fn request_idr(&self) {
+        self.force_idr.store(true, Ordering::Release);
     }
 
     fn stop(mut self) {
@@ -266,6 +275,7 @@ fn run_video_encode_loop(
     frame_rx: Receiver<CaptureOutputEvent>,
     pipe_tx: Sender<PipelineMsg>,
     stop_flag: Arc<AtomicBool>,
+    force_idr: Arc<AtomicBool>,
 ) {
     let mut encoder: Option<MfHardwareEncoder> = None;
     let mut active_epoch: u64 = 0;
@@ -317,6 +327,16 @@ fn run_video_encode_loop(
             CaptureOutputEvent::Nv12Frame(frame) => {
                 if epoch_base.saturating_add(frame.source_epoch) != active_epoch {
                     continue;
+                }
+                if force_idr.swap(false, Ordering::AcqRel) {
+                    if let Some(mut old) = encoder.take() {
+                        let _ = old.flush();
+                    }
+                    if let Ok(new_enc) =
+                        MfHardwareEncoder::new(&shared_d3d.device, cfg_template.clone())
+                    {
+                        encoder = Some(new_enc);
+                    }
                 }
                 let Some(enc) = encoder.as_mut() else {
                     continue;
@@ -391,6 +411,7 @@ struct DaemonRuntime {
     audio_game_present: bool,
     audio_mic_present: bool,
     audio_sec_present: bool,
+    audio_app_slots: Vec<u8>,
     buffering_requested: bool,
     pending_session_start: bool,
     privacy_mode: bool,
@@ -418,6 +439,16 @@ impl DaemonRuntime {
         if self.audio.is_some() {
             return;
         }
+        let labels: Vec<(u8, String)> = self
+            .settings
+            .audio
+            .app_channels
+            .iter()
+            .take(4)
+            .enumerate()
+            .map(|(i, c)| (i as u8, c.name.clone()))
+            .collect();
+        self.router.set_app_audio_labels(labels);
         let target_pid = self.active_game.as_ref().map(|g| g.process_id);
         match start_audio_pipeline(self.settings.audio.clone(), target_pid, self.clock) {
             Ok((handle, rx)) => {
@@ -764,6 +795,14 @@ impl DaemonRuntime {
                 let _ = self
                     .evt_tx
                     .try_send(RecorderEvent::ClipSaved(Box::new(meta)));
+                if self.settings.replay_buffer.reset_buffer_on_clip {
+                    self.router.clear_replay_buffer();
+                    if let Some(cap) = self.video_capture.as_ref() {
+                        cap.request_idr();
+                    }
+                    self.publish_state_snapshot();
+                    info!("Replay RAM buffer cleared after clip save (reset_buffer_on_clip=true)");
+                }
                 self.enforce_storage_quota();
             }
             Err(err) => {
@@ -1032,6 +1071,20 @@ impl DaemonRuntime {
                 cached_audio_path: None,
             });
         }
+        for &slot_idx in &self.audio_app_slots {
+            if let Some(ch) = self.settings.audio.app_channels.get(usize::from(slot_idx)) {
+                audio_tracks.push(AudioTrackMetadata {
+                    track_index: (audio_tracks.len() + 1) as u8,
+                    kind: TrackKind::AudioApp(slot_idx),
+                    label: ch.name.clone(),
+                    codec: "aac".to_string(),
+                    sample_rate: 48_000,
+                    channels: 2,
+                    default_volume: ch.volume,
+                    cached_audio_path: None,
+                });
+            }
+        }
 
         ClipMetadata {
             id: Uuid::new_v4(),
@@ -1108,6 +1161,7 @@ impl DaemonRuntime {
         self.audio_game_present = false;
         self.audio_mic_present = false;
         self.audio_sec_present = false;
+        self.audio_app_slots.clear();
         self.router.clear_audio_headers();
         if self.video_capture.is_some() {
             self.sync_audio_bridge();
@@ -1122,7 +1176,16 @@ impl DaemonRuntime {
         let video_restart_needed = video_pipeline_needs_restart(&self.settings, &new_settings);
         let audio_pipeline_changed = new_settings.audio.separate_tracks
             != self.settings.audio.separate_tracks
-            || new_settings.audio.aac_bitrate_kbps != self.settings.audio.aac_bitrate_kbps;
+            || new_settings.audio.aac_bitrate_kbps != self.settings.audio.aac_bitrate_kbps
+            || new_settings.audio.app_channels.len() != self.settings.audio.app_channels.len()
+            || new_settings
+                .audio
+                .app_channels
+                .iter()
+                .zip(self.settings.audio.app_channels.iter())
+                .any(|(a, b)| {
+                    a.enabled != b.enabled || a.process_names != b.process_names || a.name != b.name
+                });
         let replay_enabled_changed =
             new_settings.replay_buffer.enabled != self.settings.replay_buffer.enabled;
 
@@ -1155,6 +1218,9 @@ impl DaemonRuntime {
                 new_settings.audio.mic_noise_suppression_strength,
                 new_settings.audio.mic_noise_gate_db,
             );
+            for (idx, ch) in new_settings.audio.app_channels.iter().take(4).enumerate() {
+                aud.set_app_channel_mix(idx as u8, ch.volume, ch.muted);
+            }
         }
 
         if hotkeys_changed {
@@ -1495,6 +1561,7 @@ fn run_coordinator_loop(
         audio_game_present: false,
         audio_mic_present: false,
         audio_sec_present: false,
+        audio_app_slots: Vec::new(),
         buffering_requested: buffering_default,
         pending_session_start: false,
         privacy_mode: false,
@@ -1662,6 +1729,12 @@ fn process_pipeline_msg(rt: &mut DaemonRuntime, msg: PipelineMsg) {
                 TrackKind::AudioGame => rt.audio_game_present = true,
                 TrackKind::AudioMic => rt.audio_mic_present = true,
                 TrackKind::AudioSecondary => rt.audio_sec_present = true,
+                TrackKind::AudioApp(slot_idx) => {
+                    if !rt.audio_app_slots.contains(&slot_idx) {
+                        rt.audio_app_slots.push(slot_idx);
+                        rt.audio_app_slots.sort_unstable();
+                    }
+                }
                 TrackKind::Video => {}
             }
             rt.router.update_audio_header(hdr);
@@ -2143,6 +2216,7 @@ mod tests {
             audio_game: Some(hdr_game),
             audio_mic: Some(hdr_mic),
             audio_secondary: None,
+            app_audio: Vec::new(),
         };
 
         let tmp_mp4 = std::env::temp_dir().join(format!("ikoch_2mbps_test_{}.mp4", Uuid::new_v4()));

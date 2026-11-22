@@ -23,7 +23,13 @@ import {
 import { api, toAssetUrl } from "../api";
 import { useI18n } from "../i18n";
 import type { ClipMetadata, RecordingKind } from "../types";
-import { formatBytes, formatDate, formatDuration } from "../utils/format";
+import {
+  formatBytes,
+  formatBytesCompact,
+  formatDate,
+  formatDateCompact,
+  formatDuration,
+} from "../utils/format";
 import { CustomSelect } from "./CustomSelect";
 
 export type KindTab = "all" | RecordingKind | "favorites";
@@ -54,6 +60,7 @@ function loadStoredColumns(): GridColumnsChoice {
 interface LibraryViewProps {
   clips: ClipMetadata[];
   loading: boolean;
+  showCardSpecs?: boolean;
   persistedState: LibraryPersistedState;
   onPersistedStateChange: (next: LibraryPersistedState) => void;
   scrollTopRef: MutableRefObject<number>;
@@ -74,6 +81,7 @@ interface LibraryViewProps {
 export function LibraryView({
   clips,
   loading,
+  showCardSpecs = true,
   persistedState,
   onPersistedStateChange,
   scrollTopRef,
@@ -491,6 +499,7 @@ export function LibraryView({
               const isCopied = copiedPath === clip.file_path;
               const isRenaming = renamingPath === clip.file_path;
               const isConfirmDelete = confirmDeletePath === clip.file_path;
+              const isCompactGrid = gridColumns === 4 || gridColumns === 5;
 
               return (
                 <div
@@ -516,7 +525,7 @@ export function LibraryView({
                       confirmDelete: false,
                     });
                   }}
-                  className="group flex flex-col overflow-hidden rounded-2xl bg-white/[0.025] ring-1 ring-white/[0.05] transition duration-200 hover:-translate-y-0.5 hover:bg-white/[0.04] hover:ring-[rgb(var(--accent-rgb)/0.55)] hover:shadow-[0_18px_40px_rgba(0,0,0,0.55)]"
+                  className="group flex flex-col overflow-hidden rounded-2xl bg-[var(--bg-card,rgba(255,255,255,0.03))] ring-1 ring-[var(--border-subtle,rgba(255,255,255,0.06))] transition duration-200 hover:-translate-y-0.5 hover:ring-[rgb(var(--accent-rgb)/0.55)] hover:shadow-[0_18px_40px_rgba(0,0,0,0.55)]"
                 >
                   {/* Large 16:9 Thumbnail & Live Hover Video Preview */}
                   <div
@@ -633,9 +642,13 @@ export function LibraryView({
 
                     {/* Bottom overlay stats + Duration pill */}
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/90 via-black/40 to-transparent px-3 pb-2.5 pt-8 text-[11px] font-medium text-slate-200">
-                      <span className="truncate text-[10px] text-slate-300/90">
-                        {clip.width}x{clip.height} • {clip.fps} fps
-                      </span>
+                      {showCardSpecs ? (
+                        <span className="truncate text-[10px] text-slate-300/90">
+                          {clip.width}x{clip.height} • {clip.fps} fps
+                        </span>
+                      ) : (
+                        <span />
+                      )}
                       <span className="rounded-md bg-black/80 px-1.5 py-0.5 font-mono text-[11px] font-bold text-white ring-1 ring-white/10">
                         {formatDuration(clip.duration_sec)}
                       </span>
@@ -688,17 +701,35 @@ export function LibraryView({
                         </h3>
                       )}
 
-                      <div className="mt-1 flex items-center gap-1.5 truncate text-[11px] text-slate-400">
-                        <span className="font-medium text-[var(--accent-hover)]">
-                          {clip.game_name || t.library.defaultScreen}
-                        </span>
-                        <span>•</span>
-                        <span>{formatDate(clip.created_at, lang)}</span>
-                        <span>•</span>
-                        <span className="font-mono text-slate-500">
-                          {formatBytes(clip.file_size_bytes, lang)}
-                        </span>
-                      </div>
+                      {isCompactGrid ? (
+                        <div className="mt-1 space-y-0.5 text-[11px] text-[var(--text-secondary,rgb(148,163,184))]">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate font-medium text-[var(--accent-hover)]">
+                              {clip.game_name || t.library.defaultScreen}
+                            </span>
+                            <span className="shrink-0 font-mono text-[10px] opacity-80">
+                              {formatBytesCompact(clip.file_size_bytes, lang)}
+                            </span>
+                          </div>
+                          <div className="truncate text-[10px] opacity-75">
+                            {formatDateCompact(clip.created_at)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-1 flex items-center gap-1.5 truncate text-[11px] text-[var(--text-secondary,rgb(148,163,184))]">
+                          <span className="truncate font-medium text-[var(--accent-hover)]">
+                            {clip.game_name || t.library.defaultScreen}
+                          </span>
+                          <span className="shrink-0">•</span>
+                          <span className="shrink-0">
+                            {formatDate(clip.created_at, lang)}
+                          </span>
+                          <span className="shrink-0">•</span>
+                          <span className="shrink-0 font-mono opacity-80">
+                            {formatBytes(clip.file_size_bytes, lang)}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Subtle rename / delete controls on hover */}

@@ -215,6 +215,8 @@ pub struct TrimRequest {
     pub audio_mode: TrimAudioExportMode,
     pub game_volume: f32,
     pub mic_volume: f32,
+    #[serde(default)]
+    pub track_mix: Vec<TrackMixSpec>,
 }
 
 /// Target size presets for the "Compress for Discord" FFmpeg workflow.
@@ -255,6 +257,8 @@ pub struct DiscordCompressRequest {
     pub mix_audio_tracks: bool,
     pub game_volume: f32,
     pub mic_volume: f32,
+    #[serde(default)]
+    pub track_mix: Vec<TrackMixSpec>,
 }
 
 impl DiscordCompressRequest {

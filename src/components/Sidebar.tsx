@@ -59,7 +59,7 @@ export function Sidebar({
   ];
 
   return (
-    <aside className="flex w-52 shrink-0 flex-col justify-between border-r border-white/[0.06] bg-[var(--bg-panel)] p-3">
+    <aside className="flex w-52 shrink-0 flex-col justify-between border-r border-[var(--border-subtle,rgba(255,255,255,0.06))] bg-[var(--bg-sidebar,var(--bg-panel))] p-3">
       {/* Navigation links */}
       <nav className="space-y-1 pt-1">
         {navItems.map((item) => {

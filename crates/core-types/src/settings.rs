@@ -100,15 +100,57 @@ fn normalize_hex_color(raw: &mut String, fallback: &str) {
     }
 }
 
+/// Corner radius preset for cards and panels.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiCornerRadius {
+    Sharp,
+    #[default]
+    Medium,
+    Soft,
+}
+
+/// UI spacing density preset.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiDensity {
+    Compact,
+    #[default]
+    Normal,
+}
+
+/// Visual layout customization options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiSettings {
+    pub corner_radius: UiCornerRadius,
+    pub density: UiDensity,
+    pub glass_panels: bool,
+    pub show_card_specs: bool,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            corner_radius: UiCornerRadius::Medium,
+            density: UiDensity::Normal,
+            glass_panels: true,
+            show_card_specs: true,
+        }
+    }
+}
+
 /// Root persistent settings persisted to disk and synced with the Tauri UI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
     pub schema_version: u32,
     pub launch_at_startup: bool,
+    pub check_updates_on_startup: bool,
     pub language: AppLanguage,
     pub theme: AppTheme,
     pub custom_theme: CustomThemeColors,
+    pub ui: UiSettings,
     pub capture: CaptureSettings,
     pub video: VideoSettings,
     pub audio: AudioSettings,
@@ -123,9 +165,11 @@ impl Default for AppSettings {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION,
             launch_at_startup: false,
+            check_updates_on_startup: true,
             language: AppLanguage::Ru,
             theme: AppTheme::IkochDark,
             custom_theme: CustomThemeColors::default(),
+            ui: UiSettings::default(),
             capture: CaptureSettings::default(),
             video: VideoSettings::default(),
             audio: AudioSettings::default(),
@@ -165,6 +209,10 @@ impl AppSettings {
         self.audio.sample_rate_hz = 48_000;
         self.audio.channels = 2;
         self.audio.aac_bitrate_kbps = self.audio.aac_bitrate_kbps.clamp(64, 320);
+        self.audio.app_channels.truncate(4);
+        for ch in &mut self.audio.app_channels {
+            ch.volume = ch.volume.clamp(0.0, 2.0);
+        }
         self.replay_buffer.duration_secs = self
             .replay_buffer
             .duration_secs
@@ -460,6 +508,45 @@ pub struct AudioDeviceInfo {
     pub is_default: bool,
 }
 
+/// Active Windows audio session process detected via `IAudioSessionEnumerator`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveAudioAppInfo {
+    pub process_name: String,
+    pub display_name: String,
+    pub pid: u32,
+}
+
+/// Configurable per-application WASAPI process loopback channel (e.g. Discord, Music/Browser).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppAudioChannelConfig {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub process_names: Vec<String>,
+    pub volume: f32,
+    pub muted: bool,
+}
+
+impl Default for AppAudioChannelConfig {
+    fn default() -> Self {
+        Self {
+            id: "custom".to_string(),
+            name: "App Audio".to_string(),
+            enabled: false,
+            process_names: Vec::new(),
+            volume: 1.0,
+            muted: false,
+        }
+    }
+}
+
+/// Default per-application audio separation slots (empty by default; user adds apps as needed).
+#[must_use]
+pub fn default_app_audio_channels() -> Vec<AppAudioChannelConfig> {
+    Vec::new()
+}
+
 /// System/Game audio loopback capture mode.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", content = "device_id", rename_all = "snake_case")]
@@ -540,6 +627,9 @@ pub struct AudioSettings {
     pub aac_bitrate_kbps: u32,
     /// Records clean stem tracks (`Game`, `Mic`, optional `Secondary`) alongside the default `Mixed` track.
     pub separate_tracks: bool,
+    /// Per-application WASAPI loopback channels (lazily spawned only when matching process is running).
+    #[serde(default = "default_app_audio_channels")]
+    pub app_channels: Vec<AppAudioChannelConfig>,
 }
 
 impl Default for AudioSettings {
@@ -567,6 +657,7 @@ impl Default for AudioSettings {
             channels: 2,
             aac_bitrate_kbps: 128,
             separate_tracks: true,
+            app_channels: default_app_audio_channels(),
         }
     }
 }
@@ -580,6 +671,8 @@ pub struct ReplayBufferSettings {
     pub duration_secs: u32,
     /// Hard upper bound on compressed packet RAM usage in MiB.
     pub max_ram_mb: usize,
+    /// Clears the replay ring buffer after saving an instant clip so the next clip starts fresh.
+    pub reset_buffer_on_clip: bool,
 }
 
 impl Default for ReplayBufferSettings {
@@ -588,6 +681,7 @@ impl Default for ReplayBufferSettings {
             enabled: true,
             duration_secs: 30,
             max_ram_mb: 512,
+            reset_buffer_on_clip: false,
         }
     }
 }

@@ -12,11 +12,12 @@ use tracing::debug;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Mp4TrackOrder {
-    Video = 1,
-    AudioMixed = 2,
-    AudioGame = 3,
-    AudioMic = 4,
-    AudioSecondary = 5,
+    Video,
+    AudioMixed,
+    AudioGame,
+    AudioMic,
+    AudioSecondary,
+    AudioApp(u8),
 }
 
 impl From<TrackKind> for Mp4TrackOrder {
@@ -27,6 +28,7 @@ impl From<TrackKind> for Mp4TrackOrder {
             TrackKind::AudioGame => Self::AudioGame,
             TrackKind::AudioMic => Self::AudioMic,
             TrackKind::AudioSecondary => Self::AudioSecondary,
+            TrackKind::AudioApp(idx) => Self::AudioApp(idx),
         }
     }
 }
@@ -39,6 +41,7 @@ impl Mp4TrackOrder {
             Self::AudioGame => TrackKind::AudioGame,
             Self::AudioMic => TrackKind::AudioMic,
             Self::AudioSecondary => TrackKind::AudioSecondary,
+            Self::AudioApp(idx) => TrackKind::AudioApp(idx),
         }
     }
 }
@@ -616,6 +619,11 @@ fn header_for_audio_track(kind: TrackKind, headers: &StreamHeaders) -> Option<&c
         TrackKind::AudioGame => headers.audio_game.as_ref(),
         TrackKind::AudioMic => headers.audio_mic.as_ref(),
         TrackKind::AudioSecondary => headers.audio_secondary.as_ref(),
+        TrackKind::AudioApp(idx) => headers
+            .app_audio
+            .iter()
+            .find(|(slot, _, _)| *slot == idx)
+            .map(|(_, _, hdr)| hdr),
     }
 }
 
@@ -678,6 +686,9 @@ fn build_moov_box(
         }
         if headers.audio_secondary.is_some() {
             active_orders.push((Mp4TrackOrder::AudioSecondary, TrackKind::AudioSecondary));
+        }
+        for (idx, _, _) in &headers.app_audio {
+            active_orders.push((Mp4TrackOrder::AudioApp(*idx), TrackKind::AudioApp(*idx)));
         }
     } else {
         for (order, ts) in tracks {
@@ -753,7 +764,10 @@ fn write_trak_box(
         // (`flags = 0x02`) in `alternate_group = 1` for non-destructive editor stems.
         let tkhd_flags: u32 = match kind {
             TrackKind::Video | TrackKind::AudioMixed => 0x03,
-            TrackKind::AudioGame | TrackKind::AudioMic | TrackKind::AudioSecondary => 0x02,
+            TrackKind::AudioGame
+            | TrackKind::AudioMic
+            | TrackKind::AudioSecondary
+            | TrackKind::AudioApp(_) => 0x02,
         };
         write_full_box(trak, b"tkhd", 0, tkhd_flags, |b| {
             b.extend_from_slice(&0u32.to_be_bytes());
@@ -765,7 +779,10 @@ fn write_trak_box(
             b.extend_from_slice(&0u16.to_be_bytes()); // layer
             let alternate_group: u16 = match kind {
                 TrackKind::Video | TrackKind::AudioMixed => 0,
-                TrackKind::AudioGame | TrackKind::AudioMic | TrackKind::AudioSecondary => 1,
+                TrackKind::AudioGame
+                | TrackKind::AudioMic
+                | TrackKind::AudioSecondary
+                | TrackKind::AudioApp(_) => 1,
             };
             b.extend_from_slice(&alternate_group.to_be_bytes()); // alternate_group
             b.extend_from_slice(&if kind.is_audio() { 0x0100u16 } else { 0u16 }.to_be_bytes()); // volume (1.0 = 0x0100 for audio)
@@ -792,16 +809,27 @@ fn write_trak_box(
 
             write_full_box(mdia, b"hdlr", 0, 0, |b| {
                 b.extend_from_slice(&0u32.to_be_bytes());
-                let (handler_type, name): (&[u8; 4], &[u8]) = match kind {
-                    TrackKind::Video => (b"vide", b"VideoHandler\0"),
-                    TrackKind::AudioMixed => (b"soun", b"Mixed Audio\0"),
-                    TrackKind::AudioGame => (b"soun", b"Game Audio\0"),
-                    TrackKind::AudioMic => (b"soun", b"Microphone\0"),
-                    TrackKind::AudioSecondary => (b"soun", b"Secondary Audio\0"),
+                let (handler_type, owned_name): (&[u8; 4], Vec<u8>) = match kind {
+                    TrackKind::Video => (b"vide", b"VideoHandler\0".to_vec()),
+                    TrackKind::AudioMixed => (b"soun", b"Mixed Audio\0".to_vec()),
+                    TrackKind::AudioGame => (b"soun", b"Game Audio\0".to_vec()),
+                    TrackKind::AudioMic => (b"soun", b"Microphone\0".to_vec()),
+                    TrackKind::AudioSecondary => (b"soun", b"Secondary Audio\0".to_vec()),
+                    TrackKind::AudioApp(idx) => {
+                        let label = headers
+                            .app_audio
+                            .iter()
+                            .find(|(slot, _, _)| *slot == idx)
+                            .map(|(_, lbl, _)| lbl.as_str())
+                            .unwrap_or("App Audio");
+                        let mut bytes = label.as_bytes().to_vec();
+                        bytes.push(0);
+                        (b"soun", bytes)
+                    }
                 };
                 b.extend_from_slice(handler_type);
                 b.extend_from_slice(&[0u8; 12]);
-                b.extend_from_slice(name);
+                b.extend_from_slice(&owned_name);
             });
 
             write_box(mdia, b"minf", |minf| {
@@ -872,7 +900,8 @@ fn write_stbl_box(
                 TrackKind::AudioMixed
                 | TrackKind::AudioGame
                 | TrackKind::AudioMic
-                | TrackKind::AudioSecondary => {
+                | TrackKind::AudioSecondary
+                | TrackKind::AudioApp(_) => {
                     let audio_hdr = header_for_audio_track(kind, headers);
                     let channels = audio_hdr.map_or(2, |h| h.channels);
                     let sample_rate = audio_hdr.map_or(48_000, |h| h.sample_rate);

@@ -11,6 +11,7 @@ pub mod commands;
 pub mod ffmpeg_editor;
 pub mod state;
 pub mod tray;
+pub mod updater;
 pub mod webhook;
 
 pub use core_types::{AppSettings, ClipMetadata, DaemonStateSnapshot, RecorderEvent};
@@ -91,6 +92,7 @@ pub fn run() {
             commands::list_windows,
             commands::list_audio_output_devices,
             commands::list_audio_input_devices,
+            commands::list_active_audio_apps,
             commands::send_recorder_command,
             commands::set_capture_target,
             commands::save_clip_now,
@@ -118,6 +120,9 @@ pub fn run() {
             commands::reveal_clip_in_explorer,
             commands::get_editor_cache_stats,
             commands::clear_editor_cache_now,
+            commands::pick_audio_file,
+            commands::check_for_updates,
+            commands::download_and_install_update,
         ])
         .on_window_event(|window, event| {
             // Zero-RAM background design: destroy the main WebView2 process completely when closed.

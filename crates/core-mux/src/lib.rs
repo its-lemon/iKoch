@@ -43,6 +43,7 @@ mod tests {
             audio_game: None,
             audio_mic: None,
             audio_secondary: None,
+            app_audio: Vec::new(),
         }
     }
 

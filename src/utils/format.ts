@@ -32,6 +32,20 @@ export function formatBytes(bytes: number, lang: AppLanguage = "ru"): string {
   return `${val.toFixed(precision)} ${units[idx]}`;
 }
 
+export function formatBytesCompact(bytes: number, lang: AppLanguage = "ru"): string {
+  const units =
+    lang === "en" ? ["B", "KB", "MB", "GB", "TB"] : ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+  if (!Number.isFinite(bytes) || bytes <= 0) return `0 ${units[2]}`;
+  let val = bytes;
+  let idx = 0;
+  while (val >= 1024 && idx < units.length - 1) {
+    val /= 1024;
+    idx += 1;
+  }
+  const precision = idx >= 2 && val < 10 ? 1 : 0;
+  return `${val.toFixed(precision)} ${units[idx]}`;
+}
+
 export function formatDate(iso: string, lang: AppLanguage = "ru"): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -41,6 +55,16 @@ export function formatDate(iso: string, lang: AppLanguage = "ru"): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+export function formatDateCompact(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${dd}.${mm}, ${hh}:${min}`;
 }
 
 export function formatDateRu(iso: string): string {
@@ -70,6 +94,10 @@ export function captureTargetLabel(
     case "specific_window":
       return `[${target.process_name}] ${target.title || (lang === "en" ? "Window" : "Окно")}`;
   }
+}
+
+export function trackKindKey(kind: TrackKind): string {
+  return typeof kind === "string" ? kind : `audio_app_${kind.audio_app}`;
 }
 
 export function trackDisplayName(

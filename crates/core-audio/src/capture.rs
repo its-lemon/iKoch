@@ -404,6 +404,15 @@ impl AudioPipelineHandle {
             .send(MixerControl::SetSecondaryMuted(muted));
     }
 
+    /// Updates live volume and mute state for an active per-application audio channel.
+    pub fn set_app_channel_mix(&self, slot_idx: u8, volume: f32, muted: bool) {
+        let _ = self.mixer_cmd_tx.send(MixerControl::SetAppChannelMix {
+            slot_idx,
+            volume,
+            muted,
+        });
+    }
+
     /// Updates pure-Rust RNNoise microphone suppression and noise gate directly on the Mic thread.
     pub fn set_mic_noise_suppression(
         &self,
@@ -508,6 +517,7 @@ enum SourceSlot {
     Game,
     Mic,
     Secondary,
+    App(u8),
 }
 
 #[derive(Debug, Clone)]
@@ -536,6 +546,11 @@ enum MixerControl {
     SetGameMuted(bool),
     SetMicMuted(bool),
     SetSecondaryMuted(bool),
+    SetAppChannelMix {
+        slot_idx: u8,
+        volume: f32,
+        muted: bool,
+    },
     Stop,
 }
 
@@ -578,8 +593,21 @@ pub fn start_audio_pipeline(
     let game_active = settings.game_enabled;
     let mic_active = settings.mic_enabled && settings.mic_device != MicDeviceConfig::None;
     let sec_active = settings.secondary_output_device.is_some();
-    let expected_initial_sources =
-        usize::from(game_active) + usize::from(mic_active) + usize::from(sec_active);
+
+    let mut active_app_sources: Vec<(u8, String, u32, f32, bool)> = Vec::new();
+    for (idx, ch) in settings.app_channels.iter().take(4).enumerate() {
+        if ch.enabled && !ch.process_names.is_empty() {
+            if let Some(pid) = crate::devices::find_running_pid_by_process_names(&ch.process_names)
+            {
+                active_app_sources.push((idx as u8, ch.name.clone(), pid, ch.volume, ch.muted));
+            }
+        }
+    }
+
+    let expected_initial_sources = usize::from(game_active)
+        + usize::from(mic_active)
+        + usize::from(sec_active)
+        + active_app_sources.len();
     let startup_barrier = Arc::new(StartupBarrier::new(
         expected_initial_sources,
         fallback_pts_us,
@@ -655,18 +683,19 @@ pub fn start_audio_pipeline(
     }
 
     {
-        let tx = pcm_tx;
+        let tx = pcm_tx.clone();
         let warn_tx = out_tx.clone();
         let stop = Arc::clone(&stop_flag);
         let tel = Arc::clone(&sec_telemetry);
         let barrier = Arc::clone(&startup_barrier);
         let device_id = settings.secondary_output_device.clone();
+        let mic_dsp = mic_dsp_cfg.clone();
         let handle = thread::Builder::new()
             .name("rustclip-audio-secondary".to_string())
             .spawn(move || {
                 run_source_capture_loop(
                     SourceRole::SecondaryLoopback { device_id },
-                    mic_dsp_cfg,
+                    mic_dsp,
                     barrier,
                     clock,
                     sec_cmd_rx,
@@ -682,6 +711,42 @@ pub fn start_audio_pipeline(
         threads.push(handle);
     }
 
+    let mut active_app_mixer_cfgs: Vec<(u8, String, f32, bool)> =
+        Vec::with_capacity(active_app_sources.len());
+    for (slot_idx, app_name, pid, volume, muted) in active_app_sources {
+        let tx = pcm_tx.clone();
+        let warn_tx = out_tx.clone();
+        let stop = Arc::clone(&stop_flag);
+        let tel = Arc::new(TrackTelemetryShared::new(&app_name));
+        let barrier = Arc::clone(&startup_barrier);
+        let mic_dsp = mic_dsp_cfg.clone();
+        let (_app_cmd_tx, app_cmd_rx) = bounded(4);
+        let role_name = app_name.clone();
+        let handle = thread::Builder::new()
+            .name(format!("rustclip-audio-app-{slot_idx}"))
+            .spawn(move || {
+                run_source_capture_loop(
+                    SourceRole::AppLoopback {
+                        slot_idx,
+                        name: role_name,
+                        pid,
+                    },
+                    mic_dsp,
+                    barrier,
+                    clock,
+                    app_cmd_rx,
+                    tx,
+                    warn_tx,
+                    tel,
+                    stop,
+                );
+            })
+            .map_err(|e| AudioError::WasapiInitFailed(format!("Spawn app audio failed: {e}")))?;
+        threads.push(handle);
+        active_app_mixer_cfgs.push((slot_idx, app_name, volume, muted));
+    }
+    drop(pcm_tx);
+
     {
         let stop = Arc::clone(&stop_flag);
         let mixed_tel = Arc::clone(&mixed_telemetry);
@@ -690,12 +755,13 @@ pub fn start_audio_pipeline(
         let sec_tel = Arc::clone(&sec_telemetry);
         let barrier = Arc::clone(&startup_barrier);
         let sec_flag = Arc::clone(&has_secondary_track);
-        let cfg = settings;
+        let cfg = settings.clone();
         let handle = thread::Builder::new()
             .name("rustclip-audio-mixer".to_string())
             .spawn(move || {
                 run_mixer_loop(
                     cfg,
+                    active_app_mixer_cfgs,
                     barrier,
                     clock,
                     pcm_rx,
@@ -743,6 +809,11 @@ enum SourceRole {
     SecondaryLoopback {
         device_id: Option<String>,
     },
+    AppLoopback {
+        slot_idx: u8,
+        name: String,
+        pid: u32,
+    },
 }
 
 impl SourceRole {
@@ -751,6 +822,7 @@ impl SourceRole {
             Self::GameLoopback { .. } => SourceSlot::Game,
             Self::Microphone { .. } => SourceSlot::Mic,
             Self::SecondaryLoopback { .. } => SourceSlot::Secondary,
+            Self::AppLoopback { slot_idx, .. } => SourceSlot::App(*slot_idx),
         }
     }
 
@@ -758,7 +830,7 @@ impl SourceRole {
         match self {
             Self::Microphone { device } => *device == MicDeviceConfig::None,
             Self::SecondaryLoopback { device_id } => device_id.is_none(),
-            Self::GameLoopback { .. } => false,
+            Self::GameLoopback { .. } | Self::AppLoopback { .. } => false,
         }
     }
 }
@@ -865,6 +937,7 @@ fn run_source_capture_loop(
             SourceRole::Microphone { .. } => "Microphone Disabled",
             SourceRole::SecondaryLoopback { .. } => "Secondary Disabled",
             SourceRole::GameLoopback { .. } => "Game Disabled",
+            SourceRole::AppLoopback { .. } => "App Disabled",
         });
     }
 
@@ -971,6 +1044,7 @@ fn run_source_capture_loop(
                 SourceRole::Microphone { .. } => "Microphone Disabled",
                 SourceRole::SecondaryLoopback { .. } => "Secondary Disabled",
                 SourceRole::GameLoopback { .. } => "Game Disabled",
+                SourceRole::AppLoopback { .. } => "App Disabled",
             });
             force_reopen = false;
             silent_since = None;
@@ -1240,9 +1314,19 @@ struct MixerConfigState {
     secondary_muted: bool,
 }
 
+struct AppMixerTrack {
+    slot_idx: u8,
+    volume: f32,
+    muted: bool,
+    queue: BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
+    encoder: Option<MfAacEncoder>,
+    telemetry: Arc<TrackTelemetryShared>,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_mixer_loop(
     settings: AudioSettings,
+    app_cfgs: Vec<(u8, String, f32, bool)>,
     startup: Arc<StartupBarrier>,
     clock: MonotonicClock,
     pcm_rx: Receiver<CapturedBlock>,
@@ -1346,6 +1430,36 @@ fn run_mixer_loop(
     // Synchronize timeline epoch with all active WASAPI threads before draining block #0.
     let base_pts_us = startup.wait_for_base_pts(clock, STARTUP_BARRIER_TIMEOUT);
 
+    let mut app_tracks: Vec<AppMixerTrack> = app_cfgs
+        .into_iter()
+        .map(|(slot_idx, label, volume, muted)| {
+            let encoder = if cfg.separate_tracks {
+                match MfAacEncoder::new(TrackKind::AudioApp(slot_idx), sec_kbps) {
+                    Ok(enc) => {
+                        let _ = out_tx.send(AudioOutputEvent::StreamHeader(enc.stream_header().clone()));
+                        Some(enc)
+                    }
+                    Err(err) => {
+                        let _ = out_tx.try_send(AudioOutputEvent::RecoverableWarning(format!(
+                            "AAC encoder init failed for App {label}: {err}"
+                        )));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            AppMixerTrack {
+                slot_idx,
+                volume,
+                muted,
+                queue: BTreeMap::new(),
+                encoder,
+                telemetry: Arc::new(TrackTelemetryShared::new(&label)),
+            }
+        })
+        .collect();
+
     let mut game_queue: BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]> = BTreeMap::new();
     let mut mic_queue: BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]> = BTreeMap::new();
     let mut sec_queue: BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]> = BTreeMap::new();
@@ -1363,6 +1477,7 @@ fn run_mixer_loop(
                         &mut enc_game,
                         &mut enc_mic,
                         &mut enc_sec,
+                        &mut app_tracks,
                         base_pts_us,
                         next_mix_idx,
                         &mixed_telemetry,
@@ -1388,6 +1503,16 @@ fn run_mixer_loop(
                 Ok(MixerControl::SetGameMuted(muted)) => cfg.game_muted = muted,
                 Ok(MixerControl::SetMicMuted(muted)) => cfg.mic_muted = muted,
                 Ok(MixerControl::SetSecondaryMuted(muted)) => cfg.secondary_muted = muted,
+                Ok(MixerControl::SetAppChannelMix {
+                    slot_idx,
+                    volume,
+                    muted,
+                }) => {
+                    if let Some(track) = app_tracks.iter_mut().find(|t| t.slot_idx == slot_idx) {
+                        track.volume = volume.clamp(0.0, 2.0);
+                        track.muted = muted;
+                    }
+                }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     log_final_audio_diagnostics(&game_telemetry, &mic_telemetry, &sec_telemetry);
@@ -1405,6 +1530,7 @@ fn run_mixer_loop(
                     &mut game_queue,
                     &mut mic_queue,
                     &mut sec_queue,
+                    &mut app_tracks,
                 );
                 while let Ok(more) = pcm_rx.try_recv() {
                     insert_staged_block(
@@ -1413,6 +1539,7 @@ fn run_mixer_loop(
                         &mut game_queue,
                         &mut mic_queue,
                         &mut sec_queue,
+                        &mut app_tracks,
                     );
                 }
             }
@@ -1444,14 +1571,18 @@ fn run_mixer_loop(
             let game_ready = !cfg.game_enabled || game_queue.contains_key(&next_mix_idx);
             let mic_ready = !cfg.mic_enabled || mic_queue.contains_key(&next_mix_idx);
             let sec_ready = !cfg.secondary_enabled || sec_queue.contains_key(&next_mix_idx);
-            let all_ready = game_ready && mic_ready && sec_ready;
+            let apps_ready = app_tracks.iter().all(|t| t.queue.contains_key(&next_mix_idx));
+            let all_ready = game_ready && mic_ready && sec_ready && apps_ready;
 
             // Hold up to `MIXER_SLOT_LATE_DEADLINE_US` (120 ms, ~5 blocks) / `MIXER_JITTER_BUFFER_BLOCKS`
             // so a slightly jittery Game stream (e.g. 8ch 7.1 wireless headset) aligns with Mic
             // instead of emitting premature silence; past deadline, substitute silence and advance.
             let any_queue_overflowing = game_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
                 || mic_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
-                || sec_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2;
+                || sec_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
+                || app_tracks
+                    .iter()
+                    .any(|t| t.queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2);
             if !all_ready && !past_deadline && !any_queue_overflowing {
                 break;
             }
@@ -1486,8 +1617,18 @@ fn run_mixer_loop(
                 encode_and_emit(enc, &sec_block, pts_us, &sec_telemetry, &out_tx);
             }
 
+            let mut app_blocks: Vec<([f32; STEREO_BLOCK_SAMPLES], f32, bool)> =
+                Vec::with_capacity(app_tracks.len());
+            for track in &mut app_tracks {
+                let blk = track.queue.remove(&next_mix_idx).unwrap_or(zero_block);
+                if let Some(ref mut enc) = track.encoder {
+                    encode_and_emit(enc, &blk, pts_us, &track.telemetry, &out_tx);
+                }
+                app_blocks.push((blk, track.volume, track.muted));
+            }
+
             let mut mix_inputs: Vec<(&[f32; STEREO_BLOCK_SAMPLES], f32, bool)> =
-                Vec::with_capacity(3);
+                Vec::with_capacity(3 + app_blocks.len());
             if cfg.game_enabled {
                 mix_inputs.push((&game_block, cfg.game_volume, cfg.game_muted));
             }
@@ -1496,6 +1637,9 @@ fn run_mixer_loop(
             }
             if cfg.secondary_enabled {
                 mix_inputs.push((&sec_block, cfg.secondary_volume, cfg.secondary_muted));
+            }
+            for (blk, vol, muted) in &app_blocks {
+                mix_inputs.push((blk, *vol, *muted));
             }
             let mixed_block = mix_stereo_blocks_soft_clip(&mix_inputs);
             encode_and_emit(&mut enc_mixed, &mixed_block, pts_us, &mixed_telemetry, &out_tx);
@@ -1509,6 +1653,7 @@ fn run_mixer_loop(
         &mut enc_game,
         &mut enc_mic,
         &mut enc_sec,
+        &mut app_tracks,
         base_pts_us,
         next_mix_idx,
         &mixed_telemetry,
@@ -1526,6 +1671,7 @@ fn flush_all_encoders(
     enc_game: &mut Option<MfAacEncoder>,
     enc_mic: &mut Option<MfAacEncoder>,
     enc_sec: &mut Option<MfAacEncoder>,
+    app_tracks: &mut [AppMixerTrack],
     base_pts_us: i64,
     next_mix_idx: u64,
     mixed_tel: &Arc<TrackTelemetryShared>,
@@ -1543,6 +1689,11 @@ fn flush_all_encoders(
     }
     if let Some(ref mut enc) = enc_sec {
         flush_encoder(enc, base_pts_us, next_mix_idx, sec_tel, out_tx);
+    }
+    for track in app_tracks {
+        if let Some(ref mut enc) = track.encoder {
+            flush_encoder(enc, base_pts_us, next_mix_idx, &track.telemetry, out_tx);
+        }
     }
 }
 
@@ -1573,11 +1724,18 @@ fn insert_staged_block(
     game_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
     mic_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
     sec_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
+    app_tracks: &mut [AppMixerTrack],
 ) {
     let map = match blk.slot {
         SourceSlot::Game => game_queue,
         SourceSlot::Mic => mic_queue,
         SourceSlot::Secondary => sec_queue,
+        SourceSlot::App(slot_idx) => {
+            let Some(track) = app_tracks.iter_mut().find(|t| t.slot_idx == slot_idx) else {
+                return;
+            };
+            &mut track.queue
+        }
     };
     let target_idx = if blk.block_idx < min_idx {
         // Never discard slightly-late blocks (e.g. after 110ms silence pause or 10-40ms USB/7.1 jitter):
@@ -1818,6 +1976,21 @@ fn open_wasapi_stream(
 
             OpenedWasapiStream::open_with_client(client, mix_fmt, false, fmt_desc)
         }
+        SourceRole::AppLoopback { name, pid, .. } => {
+            let desired = WaveFormat::new(32, 32, SampleType::Float, 48_000, 2, None);
+            let client =
+                AudioClient::new_application_loopback_client(*pid, true).map_err(|e| {
+                    AudioError::DeviceDisconnected {
+                        device: format!("{name} (PID {pid}) loopback failed: {e}"),
+                    }
+                })?;
+            OpenedWasapiStream::open_with_client(
+                client,
+                desired,
+                true,
+                format!("App: {name} (PID {pid})"),
+            )
+        }
         SourceRole::SecondaryLoopback { device_id } => {
             let Some(id) = device_id else {
                 return Err(AudioError::DeviceDisconnected {
@@ -1943,6 +2116,7 @@ pub fn target_aac_bitrate_kbps(track: TrackKind, configured_kbps: u32) -> u32 {
         TrackKind::AudioMixed
         | TrackKind::AudioGame
         | TrackKind::AudioSecondary
+        | TrackKind::AudioApp(_)
         | TrackKind::Video => clamped.min(128),
     }
 }
@@ -2095,6 +2269,7 @@ mod tests {
             move || {
                 run_mixer_loop(
                     settings,
+                    Vec::new(),
                     startup,
                     clock,
                     pcm_rx,
@@ -2189,6 +2364,7 @@ mod tests {
             move || {
                 run_mixer_loop(
                     settings,
+                    Vec::new(),
                     startup,
                     clock,
                     pcm_rx,
