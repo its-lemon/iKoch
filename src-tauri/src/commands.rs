@@ -4,17 +4,16 @@ use crate::clipboard::copy_file_to_clipboard_cf_hdrop;
 use crate::ffmpeg_editor::{
     capture_frame_png as capture_frame_png_impl, prepare_editor_media as prepare_editor_media_impl,
     replace_clip_with_advanced, replace_clip_with_fast_trim, run_advanced_export,
-    run_discord_compress, run_fast_trim, run_merge_clips, MergeClipsRequest, PreparedEditorMedia,
+    run_discord_compress, run_fast_trim, PreparedEditorMedia,
 };
 use crate::state::{allow_directory_in_asset_scope, AppState};
 use crate::webhook::send_file_to_discord_webhook;
-use core_audio::{enumerate_active_audio_apps, enumerate_capture_devices, enumerate_render_devices};
+use core_audio::{enumerate_capture_devices, enumerate_render_devices};
 use core_capture::{enumerate_monitors, enumerate_windows};
 use core_types::{
-    ActiveAudioAppInfo, AdvancedExportRequest, AppSettings, AudioDeviceInfo, CaptureTarget,
-    ClipMetadata, DaemonStateSnapshot, DiscordCompressRequest, EditorCacheStats,
-    FrameScreenshotRequest, GalleryFilter, MonitorInfo, RecorderCommand, SoundNotificationKind,
-    TrimRequest, WindowInfo,
+    AdvancedExportRequest, AppSettings, AudioDeviceInfo, CaptureTarget, ClipMetadata,
+    DaemonStateSnapshot, DiscordCompressRequest, EditorCacheStats, FrameScreenshotRequest,
+    GalleryFilter, MonitorInfo, RecorderCommand, SoundNotificationKind, TrimRequest, WindowInfo,
 };
 use recorder_daemon::{
     cleanup_temp_dir, list_clip_metadata, load_clip_metadata, measure_editor_cache,
@@ -87,11 +86,6 @@ pub fn list_audio_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 #[tauri::command]
 pub fn list_audio_input_devices() -> Result<Vec<AudioDeviceInfo>, String> {
     enumerate_capture_devices().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn list_active_audio_apps() -> Result<Vec<ActiveAudioAppInfo>, String> {
-    enumerate_active_audio_apps().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -309,13 +303,6 @@ pub async fn replace_clip_advanced(
 ) -> Result<PathBuf, String> {
     let cache_dir = state.current_settings().storage.temp_dir.join("editor_cache");
     tauri::async_runtime::spawn_blocking(move || replace_clip_with_advanced(&req, &cache_dir))
-        .await
-        .map_err(|e| format!("Join error: {e}"))?
-}
-
-#[tauri::command]
-pub async fn merge_clips(req: MergeClipsRequest) -> Result<PathBuf, String> {
-    tauri::async_runtime::spawn_blocking(move || run_merge_clips(&req))
         .await
         .map_err(|e| format!("Join error: {e}"))?
 }

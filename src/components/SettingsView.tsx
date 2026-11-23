@@ -25,7 +25,6 @@ import {
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import type {
-  ActiveAudioAppInfo,
   AppLanguage,
   AppSettings,
   AppTheme,
@@ -458,23 +457,9 @@ export function SettingsView({
       .catch(() => {});
   };
 
-  const [activeAudioApps, setActiveAudioApps] = useState<ActiveAudioAppInfo[]>([]);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-
-  useEffect(() => {
-    void api.listActiveAudioApps().then(setActiveAudioApps).catch(() => {});
-  }, []);
-
-  const refreshActiveAudioApps = async () => {
-    try {
-      const list = await api.listActiveAudioApps();
-      setActiveAudioApps(list);
-    } catch {
-      /* ignore */
-    }
-  };
 
   const handleCheckUpdates = async () => {
     setCheckingUpdates(true);
@@ -729,7 +714,6 @@ export function SettingsView({
 
   const gameAudioOptions: SelectOption[] = [
     { value: "default_device", label: t.settings.gameAudioDefault },
-    { value: "game_process_only", label: t.settings.gameAudioProcess },
     ...outDevices.map((d) => ({
       value: `spec:${d.id}`,
       label: `${d.is_default ? "[Default] " : ""}${d.name}`,
@@ -1413,19 +1397,17 @@ export function SettingsView({
                       value={
                         draft.audio.audio_output_mode.mode === "specific_device"
                           ? `spec:${draft.audio.audio_output_mode.device_id}`
-                          : draft.audio.audio_output_mode.mode
+                          : "default_device"
                       }
                       options={gameAudioOptions}
                       onChange={(val) => {
                         const nextMode =
                           val === "default_device"
                             ? ({ mode: "default_device" } as const)
-                            : val === "game_process_only"
-                              ? ({ mode: "game_process_only" } as const)
-                              : ({
-                                  mode: "specific_device",
-                                  device_id: val.slice(5),
-                                } as const);
+                            : ({
+                                mode: "specific_device",
+                                device_id: val.slice(5),
+                              } as const);
                         setDraft((p) => ({
                           ...p,
                           audio: { ...p.audio, audio_output_mode: nextMode },
@@ -1849,222 +1831,6 @@ export function SettingsView({
                       </>
                     )}
                   </div>
-                </div>
-              </section>
-
-              <section className={sectionCls}>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Volume2 className="h-4 w-4 text-[var(--accent-hover)]" />
-                    <h2 className="text-sm font-bold text-white">
-                      {t.settings.appChannelsTitle}
-                    </h2>
-                    <InfoTooltip text={t.settings.tips.appChannels} />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void refreshActiveAudioApps()}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-medium text-slate-300 ring-1 ring-white/[0.08] hover:bg-white/[0.08]"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      {t.settings.appChannelsPickRunning}
-                    </button>
-                    {draft.audio.app_channels.length < 4 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setDraft((p) => ({
-                            ...p,
-                            audio: {
-                              ...p.audio,
-                              app_channels: [
-                                ...p.audio.app_channels,
-                                {
-                                  id: `app_${Date.now()}`,
-                                  name: `App ${p.audio.app_channels.length + 1}`,
-                                  enabled: true,
-                                  process_names: [],
-                                  volume: 1.0,
-                                  muted: false,
-                                },
-                              ],
-                            },
-                          }))
-                        }
-                        className="inline-flex items-center gap-1 rounded-lg bg-[var(--accent)]/20 px-2.5 py-1.5 text-[11px] font-semibold text-[var(--accent-hover)] ring-1 ring-[var(--accent)]/40 hover:bg-[var(--accent)]/30"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        {t.settings.appChannelsAdd}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-2.5">
-                  {draft.audio.app_channels.map((ch, idx) => (
-                    <div
-                      key={`${ch.id}_${idx}`}
-                      className="space-y-2.5 rounded-xl bg-white/[0.025] p-3 ring-1 ring-white/[0.06]"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <input
-                          type="text"
-                          value={ch.name}
-                          onChange={(e) => {
-                            const name = e.target.value;
-                            setDraft((p) => ({
-                              ...p,
-                              audio: {
-                                ...p.audio,
-                                app_channels: p.audio.app_channels.map((c, i) =>
-                                  i === idx ? { ...c, name } : c
-                                ),
-                              },
-                            }));
-                          }}
-                          className="w-44 rounded-lg bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-white ring-1 ring-white/[0.08] focus:outline-none focus:ring-[var(--accent)]"
-                        />
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setDraft((p) => ({
-                                ...p,
-                                audio: {
-                                  ...p.audio,
-                                  app_channels: p.audio.app_channels.map((c, i) =>
-                                    i === idx ? { ...c, enabled: !c.enabled } : c
-                                  ),
-                                },
-                              }))
-                            }
-                            className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
-                              ch.enabled
-                                ? "bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40"
-                                : "bg-white/[0.04] text-slate-400 ring-1 ring-white/[0.08]"
-                            }`}
-                          >
-                            {ch.enabled ? "ON" : "OFF"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setDraft((p) => ({
-                                ...p,
-                                audio: {
-                                  ...p.audio,
-                                  app_channels: p.audio.app_channels.filter(
-                                    (_, i) => i !== idx
-                                  ),
-                                },
-                              }))
-                            }
-                            className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"
-                            title={t.settings.appChannelsRemove}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
-                        <label className="block">
-                          <span className={labelTitleCls}>
-                            {t.settings.appChannelsProcesses}
-                          </span>
-                          <input
-                            type="text"
-                            value={ch.process_names.join(", ")}
-                            placeholder="Spotify.exe, Discord.exe"
-                            onChange={(e) => {
-                              const list = e.target.value
-                                .split(",")
-                                .map((s) => s.trim())
-                                .filter(Boolean);
-                              setDraft((p) => ({
-                                ...p,
-                                audio: {
-                                  ...p.audio,
-                                  app_channels: p.audio.app_channels.map((c, i) =>
-                                    i === idx ? { ...c, process_names: list } : c
-                                  ),
-                                },
-                              }));
-                            }}
-                            className={`${fieldCls} font-mono text-xs`}
-                          />
-                        </label>
-
-                        <div className="flex flex-col justify-end gap-1.5">
-                          {activeAudioApps.length > 0 ? (
-                            <CustomSelect
-                              value=""
-                              options={[
-                                {
-                                  value: "",
-                                  label: `+ ${t.settings.appChannelsPickRunning}`,
-                                },
-                                ...activeAudioApps.map((app) => ({
-                                  value: app.process_name,
-                                  label: `${app.display_name} (${app.process_name})`,
-                                })),
-                              ]}
-                              onChange={(proc) => {
-                                if (!proc) return;
-                                setDraft((p) => ({
-                                  ...p,
-                                  audio: {
-                                    ...p.audio,
-                                    app_channels: p.audio.app_channels.map((c, i) =>
-                                      i === idx &&
-                                      !c.process_names.some(
-                                        (x) =>
-                                          x.toLowerCase() === proc.toLowerCase()
-                                      )
-                                        ? {
-                                            ...c,
-                                            process_names: [
-                                              ...c.process_names,
-                                              proc,
-                                            ],
-                                          }
-                                        : c
-                                    ),
-                                  },
-                                }));
-                              }}
-                              ariaLabel={t.settings.appChannelsPickRunning}
-                            />
-                          ) : (
-                            <span className="text-[11px] text-slate-500">
-                              {t.settings.appChannelsNoRunning}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <AccentSlider
-                        label={ch.name}
-                        valueBadge={`${Math.round(ch.volume * 100)}%`}
-                        min={0}
-                        max={2}
-                        step={0.05}
-                        value={ch.volume}
-                        onChange={(vol) =>
-                          setDraft((p) => ({
-                            ...p,
-                            audio: {
-                              ...p.audio,
-                              app_channels: p.audio.app_channels.map((c, i) =>
-                                i === idx ? { ...c, volume: vol } : c
-                              ),
-                            },
-                          }))
-                        }
-                      />
-                    </div>
-                  ))}
                 </div>
               </section>
             </>
@@ -2717,7 +2483,7 @@ export function SettingsView({
                     <InfoTooltip text={t.settings.tips.updates} />
                   </div>
                   <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 font-mono text-[11px] font-semibold text-slate-300">
-                    {t.settings.currentVersionLabel}: v0.2.0
+                    {t.settings.currentVersionLabel}: v0.2.1
                   </span>
                 </div>
 

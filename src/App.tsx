@@ -477,7 +477,6 @@ export function App() {
             {activeTab === "editor" && settings && (
               <EditorView
                 clip={selectedClip}
-                allClips={clips}
                 settings={settings}
                 onBackToLibrary={() => selectTab("library")}
                 onClipCreatedOrUpdated={refreshClips}

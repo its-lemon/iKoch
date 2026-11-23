@@ -1,21 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown,
   ArrowLeft,
-  ArrowUp,
   ClipboardCopy,
   Download,
   Film,
-  Layers,
   Loader2,
   Maximize2,
   Minimize2,
   Pause,
   Play,
-  Plus,
   RefreshCw,
   Scissors,
-  Search,
   Volume2,
   VolumeX,
   X,
@@ -45,7 +40,6 @@ import { TimelinePanel } from "./TimelinePanel";
 
 interface EditorViewProps {
   clip: ClipMetadata | null;
-  allClips: ClipMetadata[];
   settings: AppSettings;
   onBackToLibrary: () => void;
   onClipCreatedOrUpdated: () => Promise<void>;
@@ -55,13 +49,6 @@ interface EditorViewProps {
     message: string,
     variant?: "success" | "error" | "info"
   ) => void;
-}
-
-interface MergeQueueItem {
-  uid: string;
-  clip: ClipMetadata;
-  start_sec: number;
-  end_sec: number;
 }
 
 interface TrackMixState {
@@ -94,7 +81,6 @@ function defaultMixList(
 
 export function EditorView({
   clip,
-  allClips,
   settings,
   onBackToLibrary,
   onClipCreatedOrUpdated,
@@ -142,10 +128,6 @@ export function EditorView({
   const [saveChoiceModal, setSaveChoiceModal] = useState<
     "trim" | "advanced" | null
   >(null);
-
-  const [mergeItems, setMergeItems] = useState<MergeQueueItem[]>([]);
-  const [mergeModalOpen, setMergeModalOpen] = useState(false);
-  const [mergeSearch, setMergeSearch] = useState("");
 
   const [undoStack, setUndoStack] = useState<EditHistoryState[]>([]);
   const [redoStack, setRedoStack] = useState<EditHistoryState[]>([]);
@@ -276,21 +258,12 @@ export function EditorView({
     setSaveChoiceModal(null);
 
     if (!clip) {
-      setMergeItems([]);
       return;
     }
 
     const initialDur = Math.max(clip.duration_sec || 1, 0.2);
     setDurationSec(initialDur);
     setSegments([{ start_sec: 0, end_sec: Number(initialDur.toFixed(2)) }]);
-    setMergeItems([
-      {
-        uid: `${clip.file_path}_0`,
-        clip,
-        start_sec: 0,
-        end_sec: Number(initialDur.toFixed(2)),
-      },
-    ]);
 
     let cancelled = false;
     setLoadingMedia(true);
@@ -915,38 +888,6 @@ export function EditorView({
     }
   };
 
-  const handleMergeClips = async () => {
-    if (mergeItems.length < 2) return;
-    setBusyTask(t.editor.busyMerging);
-    try {
-      const first = mergeItems[0].clip;
-      const outPath = await api.mergeClips({
-        items: mergeItems.map((m) => ({
-          source_path: m.clip.file_path,
-          start_sec: m.start_sec,
-          end_sec: m.end_sec,
-        })),
-        output_path: deriveExportPath(
-          first.file_path,
-          "merged",
-          "mp4",
-          first.game_name,
-          settings.storage.output_dir
-        ),
-        playback_speed: playbackSpeed,
-        fade_in_sec: fadeInSec,
-        fade_out_sec: fadeOutSec,
-      });
-      setLastOutputPath(outPath);
-      await onClipCreatedOrUpdated();
-      onNotify(t.editor.mergeDoneTitle, outPath, "success");
-    } catch (err) {
-      onNotify(t.editor.mergeErrorTitle, String(err), "error");
-    } finally {
-      setBusyTask(null);
-    }
-  };
-
   const handleCopyPathForDiscord = async (filePath: string) => {
     try {
       await api.copyClipToClipboard(filePath);
@@ -1005,24 +946,6 @@ export function EditorView({
             </p>
           </div>
         </div>
-
-        {/* Add Clip / Multi-Clip Merge trigger */}
-        <button
-          type="button"
-          onClick={() => {
-            setMergeSearch("");
-            setMergeModalOpen(true);
-          }}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-[rgb(var(--accent-rgb)/0.14)] px-3 py-1.5 text-xs font-semibold text-[var(--accent-hover)] ring-1 ring-[rgb(var(--accent-rgb)/0.35)] transition hover:bg-[var(--accent)] hover:text-white"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          {t.editor.addClipBtn}
-          {mergeItems.length >= 2 && (
-            <span className="ml-0.5 rounded-md bg-white/15 px-1.5 py-0.2 text-[10px] font-bold">
-              {mergeItems.length}
-            </span>
-          )}
-        </button>
       </div>
 
       {/* Main Split Workspace */}
@@ -1295,162 +1218,6 @@ export function EditorView({
             </div>
           </div>
 
-          {/* Multi-Clip Merge Queue (shown when 2+ clips are added) */}
-          {mergeItems.length >= 2 && (
-            <div className="rounded-2xl bg-[var(--bg-panel)] p-3 ring-1 ring-[rgb(var(--accent-rgb)/0.3)]">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Layers className="h-4 w-4 text-[var(--accent-hover)]" />
-                  <span className="text-xs font-bold text-white">
-                    {t.editor.mergeTitle}
-                  </span>
-                  <span className="rounded-md bg-white/[0.06] px-2 py-0.5 text-[10px] font-semibold text-slate-300">
-                    {t.editor.mergeClipCount(mergeItems.length)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMergeSearch("");
-                      setMergeModalOpen(true);
-                    }}
-                    className="inline-flex items-center gap-1 rounded-lg bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition hover:bg-white/[0.12]"
-                  >
-                    <Plus className="h-3 w-3" />
-                    {t.editor.addClipBtn}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={Boolean(busyTask)}
-                    onClick={() => void handleMergeClips()}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--accent)] px-3 py-1 text-[11px] font-semibold text-white shadow transition hover:bg-[var(--accent-hover)] disabled:opacity-40"
-                  >
-                    <Film className="h-3 w-3" />
-                    {t.editor.mergeExportBtn}
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex max-h-28 flex-col gap-1.5 overflow-y-auto pr-1">
-                {mergeItems.map((item, idx) => (
-                  <div
-                    key={item.uid}
-                    className="flex items-center gap-2 rounded-xl bg-white/[0.035] px-2.5 py-1.5 text-xs ring-1 ring-white/[0.05]"
-                  >
-                    <span className="w-4 text-center font-mono text-[10px] font-bold text-slate-400">
-                      {idx + 1}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium text-slate-100">
-                      {item.clip.title}
-                    </span>
-                    <div className="flex items-center gap-1 font-mono text-[10px] text-slate-400">
-                      <input
-                        type="number"
-                        min={0}
-                        max={Math.max(0, item.end_sec - 0.1)}
-                        step={0.1}
-                        value={Number(item.start_sec.toFixed(1))}
-                        onChange={(e) => {
-                          const v = Math.max(
-                            0,
-                            Math.min(
-                              item.end_sec - 0.1,
-                              Number(e.target.value) || 0
-                            )
-                          );
-                          setMergeItems((prev) =>
-                            prev.map((m) =>
-                              m.uid === item.uid ? { ...m, start_sec: v } : m
-                            )
-                          );
-                        }}
-                        className="w-12 rounded bg-black/40 px-1.5 py-0.5 text-center text-slate-200 ring-1 ring-white/[0.08]"
-                      />
-                      <span>→</span>
-                      <input
-                        type="number"
-                        min={item.start_sec + 0.1}
-                        max={Math.max(item.clip.duration_sec || 600, 0.2)}
-                        step={0.1}
-                        value={Number(item.end_sec.toFixed(1))}
-                        onChange={(e) => {
-                          const maxD = Math.max(
-                            item.clip.duration_sec || 600,
-                            0.2
-                          );
-                          const v = Math.max(
-                            item.start_sec + 0.1,
-                            Math.min(maxD, Number(e.target.value) || maxD)
-                          );
-                          setMergeItems((prev) =>
-                            prev.map((m) =>
-                              m.uid === item.uid ? { ...m, end_sec: v } : m
-                            )
-                          );
-                        }}
-                        className="w-12 rounded bg-black/40 px-1.5 py-0.5 text-center text-slate-200 ring-1 ring-white/[0.08]"
-                      />
-                      <span>{t.secShort}</span>
-                    </div>
-                    <div className="flex items-center gap-0.5">
-                      <button
-                        type="button"
-                        disabled={idx === 0}
-                        title={t.editor.moveUp}
-                        onClick={() =>
-                          setMergeItems((prev) => {
-                            if (idx === 0) return prev;
-                            const next = [...prev];
-                            [next[idx - 1], next[idx]] = [
-                              next[idx],
-                              next[idx - 1],
-                            ];
-                            return next;
-                          })
-                        }
-                        className="rounded p-1 text-slate-400 transition hover:bg-white/[0.08] hover:text-white disabled:opacity-25"
-                      >
-                        <ArrowUp className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={idx === mergeItems.length - 1}
-                        title={t.editor.moveDown}
-                        onClick={() =>
-                          setMergeItems((prev) => {
-                            if (idx >= prev.length - 1) return prev;
-                            const next = [...prev];
-                            [next[idx + 1], next[idx]] = [
-                              next[idx],
-                              next[idx + 1],
-                            ];
-                            return next;
-                          })
-                        }
-                        className="rounded p-1 text-slate-400 transition hover:bg-white/[0.08] hover:text-white disabled:opacity-25"
-                      >
-                        <ArrowDown className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        title={t.editor.removeClip}
-                        onClick={() =>
-                          setMergeItems((prev) =>
-                            prev.filter((m) => m.uid !== item.uid)
-                          )
-                        }
-                        className="rounded p-1 text-slate-400 transition hover:bg-rose-500/20 hover:text-rose-300"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Interactive Waveform Timeline (no duplicate inspector row) */}
           <TimelinePanel
             durationSec={durationSec}
@@ -1692,94 +1459,6 @@ export function EditorView({
                   </div>
                 </div>
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Clip Modal for Multi-Clip Merge */}
-      {mergeModalOpen && (
-        <div
-          onClick={() => setMergeModalOpen(false)}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="flex max-h-[75vh] w-full max-w-lg flex-col rounded-2xl border border-white/[0.08] bg-[var(--bg-panel)] p-5 shadow-2xl"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-bold text-white">
-                  {t.editor.mergeAddModalTitle}
-                </h3>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  {t.editor.mergeHint}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMergeModalOpen(false)}
-                className="rounded-lg p-1 text-slate-400 transition hover:bg-white/[0.08] hover:text-white"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="relative mt-3">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500" />
-              <input
-                type="text"
-                value={mergeSearch}
-                onChange={(e) => setMergeSearch(e.target.value)}
-                placeholder={t.editor.mergeAddModalSearch}
-                className="w-full rounded-xl bg-white/[0.05] py-2 pl-8 pr-3 text-xs text-white placeholder-slate-500 ring-1 ring-white/[0.08] outline-none focus:ring-[rgb(var(--accent-rgb)/0.6)]"
-              />
-            </div>
-
-            <div className="mt-3 flex-1 space-y-1.5 overflow-y-auto pr-1">
-              {allClips
-                .filter((c) => {
-                  const q = mergeSearch.trim().toLowerCase();
-                  if (!q) return true;
-                  return `${c.title} ${c.game_name}`.toLowerCase().includes(q);
-                })
-                .map((candidate) => (
-                  <button
-                    key={candidate.file_path}
-                    type="button"
-                    onClick={() => {
-                      const dur = Math.max(candidate.duration_sec || 1, 0.2);
-                      setMergeItems((prev) => [
-                        ...prev,
-                        {
-                          uid: `${candidate.file_path}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-                          clip: candidate,
-                          start_sec: 0,
-                          end_sec: Number(dur.toFixed(2)),
-                        },
-                      ]);
-                      setMergeModalOpen(false);
-                    }}
-                    className="flex w-full items-center justify-between gap-3 rounded-xl bg-white/[0.03] px-3 py-2 text-left ring-1 ring-white/[0.05] transition hover:bg-[rgb(var(--accent-rgb)/0.14)] hover:ring-[rgb(var(--accent-rgb)/0.4)]"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-semibold text-white">
-                        {candidate.title}
-                      </div>
-                      <div className="truncate text-[11px] text-slate-400">
-                        {candidate.game_name} • {candidate.width}x
-                        {candidate.height} •{" "}
-                        {formatTimePrecise(candidate.duration_sec)}
-                      </div>
-                    </div>
-                    <Plus className="h-4 w-4 shrink-0 text-[var(--accent-hover)]" />
-                  </button>
-                ))}
-              {allClips.length === 0 && (
-                <div className="py-8 text-center text-xs text-slate-500">
-                  {t.editor.mergeEmptyAvailable}
-                </div>
-              )}
             </div>
           </div>
         </div>

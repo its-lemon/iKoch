@@ -5,7 +5,7 @@
 **Simple and fast game replay recorder & clip editor for Windows**  
 **Простая и лёгкая программа для записи игровых моментов (откатов) и монтажа клипов на Windows**
 
-[![Release](https://img.shields.io/badge/version-v0.2.0-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
+[![Release](https://img.shields.io/badge/version-v0.2.1-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](Cargo.toml)
 

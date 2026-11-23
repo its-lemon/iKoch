@@ -35,21 +35,6 @@ export interface AudioDeviceInfo {
   is_default: boolean;
 }
 
-export interface ActiveAudioAppInfo {
-  process_name: string;
-  display_name: string;
-  pid: number;
-}
-
-export interface AppAudioChannelConfig {
-  id: string;
-  name: string;
-  enabled: boolean;
-  process_names: string[];
-  volume: number;
-  muted: boolean;
-}
-
 export type TrayIndicatorState = "idle" | "buffering" | "recording" | "error";
 
 export interface DetectedGameInfo {
@@ -136,8 +121,7 @@ export interface VideoSettings {
 
 export type AudioOutputMode =
   | { mode: "default_device" }
-  | { mode: "specific_device"; device_id: string }
-  | { mode: "game_process_only" };
+  | { mode: "specific_device"; device_id: string };
 
 export type MicDeviceConfig =
   | { mode: "none" }
@@ -172,7 +156,6 @@ export interface AudioSettings {
   channels: number;
   aac_bitrate_kbps: number;
   separate_tracks: boolean;
-  app_channels: AppAudioChannelConfig[];
 }
 
 export interface UpdateInfo {
@@ -486,20 +469,6 @@ export interface FrameScreenshotRequest {
   source_path: string;
   output_png_path: string;
   timestamp_sec: number;
-}
-
-export interface MergeClipItem {
-  source_path: string;
-  start_sec: number;
-  end_sec: number;
-}
-
-export interface MergeClipsRequest {
-  items: MergeClipItem[];
-  output_path: string;
-  playback_speed: number;
-  fade_in_sec: number;
-  fade_out_sec: number;
 }
 
 export type RecorderCommand =

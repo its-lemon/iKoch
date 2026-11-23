@@ -15,15 +15,14 @@ pub use capture::{
     AudioOutputEvent, AudioPipelineHandle, AudioPipelineTelemetry, AudioTrackTelemetry,
 };
 pub use core_types::{
-    ActiveAudioAppInfo, AppAudioChannelConfig, AudioDeviceInfo, AudioError, AudioOutputMode,
-    AudioSettings, AudioStreamHeader, MediaPacket, MicActivationMode, MicDeviceConfig, TrackKind,
+    AudioDeviceInfo, AudioError, AudioOutputMode, AudioSettings, AudioStreamHeader, MediaPacket,
+    MicActivationMode, MicDeviceConfig, TrackKind,
 };
 pub use denoise::{
     mix_stereo_blocks_soft_clip, soft_clip_sample, MicNoiseProcessor, RNNOISE_FRAME_SIZE,
 };
 pub use devices::{
-    enumerate_active_audio_apps, enumerate_capture_devices, enumerate_render_devices,
-    enumerate_render_devices_with_activity, find_running_pid_by_process_names,
+    enumerate_capture_devices, enumerate_render_devices, enumerate_render_devices_with_activity,
 };
 pub use mf_verify::{verify_mp4_audio_with_mf_source_reader, MfAudioVerifyReport};
 pub use resampler::{

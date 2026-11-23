@@ -34,14 +34,13 @@ pub use packet::{
     ENCODED_PACKET_CHANNEL_CAPACITY, VIDEO_FRAME_CHANNEL_CAPACITY,
 };
 pub use settings::{
-    default_app_audio_channels, ActiveAudioAppInfo, AppAudioChannelConfig, AppLanguage, AppSettings,
-    AppTheme, AudioDeviceInfo, AudioOutputMode, AudioSettings, CacheCleanupMode, CaptureMode,
-    CaptureSettings, CaptureTarget, CustomThemeColors, EditorCacheSettings, GameDetectionConfig,
-    GpuVendorPreference, HdrMode, HotkeySettings, MicActivationMode, MicDeviceConfig, MonitorInfo,
-    NotificationSettings, NotificationSoundConfig, NotificationSoundEntry, RateControlMode,
-    ReplayBufferSettings, ResolutionPreset, SoundSource, StorageSettings, UiCornerRadius,
-    UiDensity, UiSettings, VideoCodec, VideoSettings, WindowInfo, MAX_REPLAY_DURATION_SECS,
-    MIN_REPLAY_DURATION_SECS, SETTINGS_SCHEMA_VERSION,
+    AppLanguage, AppSettings, AppTheme, AudioDeviceInfo, AudioOutputMode, AudioSettings,
+    CacheCleanupMode, CaptureMode, CaptureSettings, CaptureTarget, CustomThemeColors,
+    EditorCacheSettings, GameDetectionConfig, GpuVendorPreference, HdrMode, HotkeySettings,
+    MicActivationMode, MicDeviceConfig, MonitorInfo, NotificationSettings, NotificationSoundConfig,
+    NotificationSoundEntry, RateControlMode, ReplayBufferSettings, ResolutionPreset, SoundSource,
+    StorageSettings, UiCornerRadius, UiDensity, UiSettings, VideoCodec, VideoSettings, WindowInfo,
+    MAX_REPLAY_DURATION_SECS, MIN_REPLAY_DURATION_SECS, SETTINGS_SCHEMA_VERSION,
 };
 
 #[cfg(test)]
@@ -219,7 +218,7 @@ mod tests {
         assert_eq!(dev, dev_back);
 
         let cmds = vec![
-            RecorderCommand::SetAudioOutputMode(AudioOutputMode::GameProcessOnly),
+            RecorderCommand::SetAudioOutputMode(AudioOutputMode::DefaultDevice),
             RecorderCommand::SetAudioOutputMode(AudioOutputMode::SpecificDevice(dev.id.clone())),
             RecorderCommand::SetGameMuted { muted: true },
             RecorderCommand::ToggleGameMuted,

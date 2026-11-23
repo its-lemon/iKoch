@@ -1,6 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
-  ActiveAudioAppInfo,
   AdvancedExportRequest,
   AppSettings,
   AudioDeviceInfo,
@@ -11,7 +10,6 @@ import type {
   EditorCacheStats,
   FrameScreenshotRequest,
   GalleryFilter,
-  MergeClipsRequest,
   MonitorInfo,
   PreparedEditorMedia,
   RecorderCommand,
@@ -105,9 +103,6 @@ export const api = {
   replaceClipAdvanced: (req: AdvancedExportRequest) =>
     invoke<string>("replace_clip_advanced", { req }),
 
-  mergeClips: (req: MergeClipsRequest) =>
-    invoke<string>("merge_clips", { req }),
-
   copyClipToClipboard: (path: string) =>
     invoke<void>("copy_clip_to_clipboard", { path }),
 
@@ -134,9 +129,6 @@ export const api = {
     invoke<[number, number]>("clear_editor_cache_now"),
 
   pickAudioFile: () => invoke<string | null>("pick_audio_file"),
-
-  listActiveAudioApps: () =>
-    invoke<ActiveAudioAppInfo[]>("list_active_audio_apps"),
 
   checkForUpdates: () => invoke<UpdateInfo>("check_for_updates"),
 

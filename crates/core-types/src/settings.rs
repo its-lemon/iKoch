@@ -209,10 +209,6 @@ impl AppSettings {
         self.audio.sample_rate_hz = 48_000;
         self.audio.channels = 2;
         self.audio.aac_bitrate_kbps = self.audio.aac_bitrate_kbps.clamp(64, 320);
-        self.audio.app_channels.truncate(4);
-        for ch in &mut self.audio.app_channels {
-            ch.volume = ch.volume.clamp(0.0, 2.0);
-        }
         self.replay_buffer.duration_secs = self
             .replay_buffer
             .duration_secs
@@ -508,45 +504,6 @@ pub struct AudioDeviceInfo {
     pub is_default: bool,
 }
 
-/// Active Windows audio session process detected via `IAudioSessionEnumerator`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ActiveAudioAppInfo {
-    pub process_name: String,
-    pub display_name: String,
-    pub pid: u32,
-}
-
-/// Configurable per-application WASAPI process loopback channel (e.g. Discord, Music/Browser).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct AppAudioChannelConfig {
-    pub id: String,
-    pub name: String,
-    pub enabled: bool,
-    pub process_names: Vec<String>,
-    pub volume: f32,
-    pub muted: bool,
-}
-
-impl Default for AppAudioChannelConfig {
-    fn default() -> Self {
-        Self {
-            id: "custom".to_string(),
-            name: "App Audio".to_string(),
-            enabled: false,
-            process_names: Vec::new(),
-            volume: 1.0,
-            muted: false,
-        }
-    }
-}
-
-/// Default per-application audio separation slots (empty by default; user adds apps as needed).
-#[must_use]
-pub fn default_app_audio_channels() -> Vec<AppAudioChannelConfig> {
-    Vec::new()
-}
-
 /// System/Game audio loopback capture mode.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", content = "device_id", rename_all = "snake_case")]
@@ -556,9 +513,6 @@ pub enum AudioOutputMode {
     DefaultDevice,
     /// Captures a specific Windows audio render endpoint by device ID.
     SpecificDevice(String),
-    /// Captures audio only from the detected/captured game PID (Win10 20348+ / Win11),
-    /// automatically falling back to `DefaultDevice` if unsupported or capturing a monitor.
-    GameProcessOnly,
 }
 
 /// Microphone input selection mode.
@@ -627,9 +581,6 @@ pub struct AudioSettings {
     pub aac_bitrate_kbps: u32,
     /// Records clean stem tracks (`Game`, `Mic`, optional `Secondary`) alongside the default `Mixed` track.
     pub separate_tracks: bool,
-    /// Per-application WASAPI loopback channels (lazily spawned only when matching process is running).
-    #[serde(default = "default_app_audio_channels")]
-    pub app_channels: Vec<AppAudioChannelConfig>,
 }
 
 impl Default for AudioSettings {
@@ -657,7 +608,6 @@ impl Default for AudioSettings {
             channels: 2,
             aac_bitrate_kbps: 128,
             separate_tracks: true,
-            app_channels: default_app_audio_channels(),
         }
     }
 }

@@ -152,6 +152,14 @@ mod tests {
         headers.audio_game = Some(make_hdr(TrackKind::AudioGame));
         headers.audio_mic = Some(make_hdr(TrackKind::AudioMic));
         headers.audio_secondary = Some(make_hdr(TrackKind::AudioSecondary));
+        headers.app_audio = vec![
+            (0, "Discord".to_string(), make_hdr(TrackKind::AudioApp(0))),
+            (
+                1,
+                "Music / Browser".to_string(),
+                make_hdr(TrackKind::AudioApp(1)),
+            ),
+        ];
 
         let mut rb = GopRingBuffer::new(15, 64 * 1024 * 1024);
         rb.set_headers(headers);
@@ -164,6 +172,8 @@ mod tests {
                 TrackKind::AudioGame,
                 TrackKind::AudioMic,
                 TrackKind::AudioSecondary,
+                TrackKind::AudioApp(0),
+                TrackKind::AudioApp(1),
             ] {
                 rb.push_packet(MediaPacket::new(
                     track,
@@ -183,24 +193,28 @@ mod tests {
         assert!(exported_pkts.iter().any(|p| p.track == TrackKind::AudioGame));
         assert!(exported_pkts.iter().any(|p| p.track == TrackKind::AudioMic));
         assert!(exported_pkts.iter().any(|p| p.track == TrackKind::AudioSecondary));
+        assert!(exported_pkts.iter().any(|p| p.track == TrackKind::AudioApp(0)));
+        assert!(exported_pkts.iter().any(|p| p.track == TrackKind::AudioApp(1)));
 
         let out_mp4 = temp_dir.join("multi_audio_clip.mp4");
         write_faststart_mp4(&out_mp4, &exported_hdrs, &exported_pkts)?;
         let bytes = fs::read(&out_mp4)?;
         let mp4a_count = bytes.windows(4).filter(|w| *w == b"mp4a").count();
-        assert_eq!(mp4a_count, 4, "expected 4 mp4a audio tracks in moov");
+        assert_eq!(mp4a_count, 6, "expected 6 mp4a audio tracks in moov");
         assert!(bytes.windows(11).any(|w| w == b"Mixed Audio"));
         assert!(bytes.windows(10).any(|w| w == b"Game Audio"));
         assert!(bytes.windows(10).any(|w| w == b"Microphone"));
         assert!(bytes.windows(15).any(|w| w == b"Secondary Audio"));
+        assert!(bytes.windows(7).any(|w| w == b"Discord"));
+        assert!(bytes.windows(15).any(|w| w == b"Music / Browser"));
 
-        // Verify tkhd flags: [Video=0x03, Mixed=0x03, Game=0x02, Mic=0x02, Secondary=0x02].
+        // Verify tkhd flags: [Video=0x03, Mixed=0x03, Game=0x02, Mic=0x02, Secondary=0x02, App0=0x02, App1=0x02].
         let tkhd_flags: Vec<u32> = bytes
             .windows(8)
             .filter(|w| &w[0..4] == b"tkhd")
             .map(|w| u32::from_be_bytes([0, w[5], w[6], w[7]]))
             .collect();
-        assert_eq!(tkhd_flags, vec![0x03, 0x03, 0x02, 0x02, 0x02]);
+        assert_eq!(tkhd_flags, vec![0x03, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02]);
 
         let _ = fs::remove_dir_all(&temp_dir);
         Ok(())
