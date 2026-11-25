@@ -20,11 +20,14 @@ import {
   Save,
   Trash2,
   Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import type {
+  ActiveAudioAppInfo,
+  AppAudioSlotConfig,
   AppLanguage,
   AppSettings,
   AppTheme,
@@ -311,6 +314,26 @@ export function SettingsView({
   useEffect(() => {
     void refreshCacheStats();
   }, [refreshCacheStats]);
+
+  const [activeAudioApps, setActiveAudioApps] = useState<ActiveAudioAppInfo[]>(
+    []
+  );
+  const [appPickerOpen, setAppPickerOpen] = useState(false);
+  const [loadingAudioApps, setLoadingAudioApps] = useState(false);
+
+  const loadActiveAudioApps = useCallback(async () => {
+    setLoadingAudioApps(true);
+    try {
+      const apps = await api.listActiveAudioApps();
+      setActiveAudioApps(apps);
+      setAppPickerOpen(true);
+    } catch {
+      setActiveAudioApps([]);
+      setAppPickerOpen(true);
+    } finally {
+      setLoadingAudioApps(false);
+    }
+  }, []);
 
   const stopMicTester = () => {
     if (micRafRef.current !== null) {
@@ -714,6 +737,7 @@ export function SettingsView({
 
   const gameAudioOptions: SelectOption[] = [
     { value: "default_device", label: t.settings.gameAudioDefault },
+    { value: "game_process_only", label: t.settings.gameAudioProcess },
     ...outDevices.map((d) => ({
       value: `spec:${d.id}`,
       label: `${d.is_default ? "[Default] " : ""}${d.name}`,
@@ -1397,17 +1421,19 @@ export function SettingsView({
                       value={
                         draft.audio.audio_output_mode.mode === "specific_device"
                           ? `spec:${draft.audio.audio_output_mode.device_id}`
-                          : "default_device"
+                          : draft.audio.audio_output_mode.mode
                       }
                       options={gameAudioOptions}
                       onChange={(val) => {
                         const nextMode =
                           val === "default_device"
                             ? ({ mode: "default_device" } as const)
-                            : ({
-                                mode: "specific_device",
-                                device_id: val.slice(5),
-                              } as const);
+                            : val === "game_process_only"
+                              ? ({ mode: "game_process_only" } as const)
+                              : ({
+                                  mode: "specific_device",
+                                  device_id: val.slice(5),
+                                } as const);
                         setDraft((p) => ({
                           ...p,
                           audio: { ...p.audio, audio_output_mode: nextMode },
@@ -1531,7 +1557,7 @@ export function SettingsView({
                     label={t.settings.gameVolume}
                     valueBadge={`${Math.round(draft.audio.game_volume * 100)}%`}
                     min={0}
-                    max={2}
+                    max={5}
                     step={0.05}
                     value={draft.audio.game_volume}
                     onChange={(v) => {
@@ -1551,7 +1577,7 @@ export function SettingsView({
                     label={t.settings.micVolume}
                     valueBadge={`${Math.round(draft.audio.mic_volume * 100)}%`}
                     min={0}
-                    max={2}
+                    max={5}
                     step={0.05}
                     value={draft.audio.mic_volume}
                     onChange={(v) => {
@@ -1573,7 +1599,7 @@ export function SettingsView({
                       draft.audio.secondary_volume * 100
                     )}%`}
                     min={0}
-                    max={2}
+                    max={5}
                     step={0.05}
                     value={draft.audio.secondary_volume}
                     onChange={(v) => {
@@ -1589,6 +1615,304 @@ export function SettingsView({
                     }}
                   />
                 </div>
+
+                <div className="pt-1">
+                  <ToggleSwitch
+                    checked={draft.audio.apply_volumes_to_editor ?? true}
+                    onChange={(v) =>
+                      setDraft((p) => ({
+                        ...p,
+                        audio: { ...p.audio, apply_volumes_to_editor: v },
+                      }))
+                    }
+                    label={t.settings.applyVolumesToEditor}
+                    tooltip={t.settings.tips.applyVolumesToEditor}
+                  />
+                </div>
+              </section>
+
+              <section className={sectionCls}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="text-sm font-bold text-white">
+                      {t.settings.appAudioTitle}
+                    </h2>
+                    <InfoTooltip text={t.settings.tips.appAudio} />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void loadActiveAudioApps()}
+                      disabled={loadingAudioApps}
+                      className={actionChipBtn}
+                    >
+                      <RefreshCw
+                        className={`h-3 w-3 ${loadingAudioApps ? "animate-spin" : ""}`}
+                      />
+                      {t.settings.appAudioPickRunning}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextSlot: AppAudioSlotConfig = {
+                          id: `app-${Date.now()}`,
+                          label: "",
+                          process_names: [],
+                          volume: 1.0,
+                          muted: false,
+                          enabled: true,
+                        };
+                        setDraft((p) => ({
+                          ...p,
+                          audio: {
+                            ...p.audio,
+                            app_audio_slots: [
+                              ...(p.audio.app_audio_slots ?? []),
+                              nextSlot,
+                            ],
+                          },
+                        }));
+                      }}
+                      className={actionChipBtn}
+                    >
+                      <Plus className="h-3 w-3" />
+                      {t.settings.appAudioAddChannel}
+                    </button>
+                  </div>
+                </div>
+
+                {appPickerOpen && (
+                  <div className="rounded-xl bg-white/[0.03] p-3 ring-1 ring-white/[0.08]">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-300">
+                        {t.settings.appAudioPickRunning}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setAppPickerOpen(false)}
+                        className="rounded-lg p-1 text-slate-400 hover:bg-white/[0.06] hover:text-white"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    {activeAudioApps.length === 0 ? (
+                      <div className="text-xs text-slate-400">
+                        {t.settings.appAudioNoRunning}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {activeAudioApps.map((app) => (
+                          <button
+                            key={`${app.pid}-${app.exe_name}`}
+                            type="button"
+                            onClick={() => {
+                              const cleanLabel = app.exe_name.replace(
+                                /\.exe$/i,
+                                ""
+                              );
+                              const nextSlot: AppAudioSlotConfig = {
+                                id: `app-${Date.now()}-${app.pid}`,
+                                label: cleanLabel,
+                                process_names: [app.exe_name],
+                                volume: 1.0,
+                                muted: false,
+                                enabled: true,
+                              };
+                              setDraft((p) => ({
+                                ...p,
+                                audio: {
+                                  ...p.audio,
+                                  app_audio_slots: [
+                                    ...(p.audio.app_audio_slots ?? []),
+                                    nextSlot,
+                                  ],
+                                },
+                              }));
+                              setAppPickerOpen(false);
+                            }}
+                            className="flex items-center gap-1.5 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-xs text-slate-200 ring-1 ring-white/[0.08] transition hover:bg-white/[0.1]"
+                          >
+                            <span
+                              className={`h-1.5 w-1.5 rounded-full ${
+                                app.peak > 0.0001
+                                  ? "bg-emerald-400"
+                                  : "bg-slate-400"
+                              }`}
+                            />
+                            <span>{app.exe_name}</span>
+                            <span className="text-[10px] text-slate-400">
+                              PID {app.pid}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(draft.audio.app_audio_slots ?? []).length === 0 ? (
+                  <div className="rounded-xl bg-white/[0.02] p-3.5 text-xs text-slate-400 ring-1 ring-white/[0.05]">
+                    {t.settings.appAudioEmpty}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {(draft.audio.app_audio_slots ?? []).map((slot, idx) => (
+                      <div
+                        key={slot.id || idx}
+                        className="rounded-xl bg-white/[0.025] p-3.5 ring-1 ring-white/[0.06]"
+                      >
+                        <div className="grid grid-cols-1 gap-3 md:grid-cols-12 md:items-center">
+                          <div className="md:col-span-3">
+                            <input
+                              type="text"
+                              value={slot.label}
+                              placeholder={t.settings.appAudioSlotNamePlaceholder}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setDraft((p) => ({
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    app_audio_slots: (
+                                      p.audio.app_audio_slots ?? []
+                                    ).map((s, i) =>
+                                      i === idx ? { ...s, label: val } : s
+                                    ),
+                                  },
+                                }));
+                              }}
+                              className="w-full rounded-xl bg-black/35 px-3 py-1.5 text-xs text-white placeholder-slate-500 ring-1 ring-white/[0.08] outline-none focus:ring-[var(--accent)]"
+                            />
+                          </div>
+                          <div className="md:col-span-4">
+                            <input
+                              type="text"
+                              value={slot.process_names.join(", ")}
+                              placeholder={
+                                t.settings.appAudioProcessesPlaceholder
+                              }
+                              onChange={(e) => {
+                                const procs = e.target.value
+                                  .split(",")
+                                  .map((s) => s.trim())
+                                  .filter(Boolean);
+                                setDraft((p) => ({
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    app_audio_slots: (
+                                      p.audio.app_audio_slots ?? []
+                                    ).map((s, i) =>
+                                      i === idx
+                                        ? { ...s, process_names: procs }
+                                        : s
+                                    ),
+                                  },
+                                }));
+                              }}
+                              className="w-full rounded-xl bg-black/35 px-3 py-1.5 text-xs text-white placeholder-slate-500 ring-1 ring-white/[0.08] outline-none focus:ring-[var(--accent)]"
+                            />
+                          </div>
+                          <div className="md:col-span-3">
+                            <AccentSlider
+                              label=""
+                              valueBadge={`${Math.round(slot.volume * 100)}%`}
+                              min={0}
+                              max={5}
+                              step={0.05}
+                              value={slot.volume}
+                              onChange={(v) => {
+                                setDraft((p) => ({
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    app_audio_slots: (
+                                      p.audio.app_audio_slots ?? []
+                                    ).map((s, i) =>
+                                      i === idx ? { ...s, volume: v } : s
+                                    ),
+                                  },
+                                }));
+                              }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-end gap-2 md:col-span-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDraft((p) => ({
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    app_audio_slots: (
+                                      p.audio.app_audio_slots ?? []
+                                    ).map((s, i) =>
+                                      i === idx ? { ...s, muted: !s.muted } : s
+                                    ),
+                                  },
+                                }));
+                              }}
+                              className={`rounded-lg p-1.5 transition ${
+                                slot.muted
+                                  ? "bg-rose-500/20 text-rose-400"
+                                  : "bg-white/[0.05] text-slate-300 hover:text-white"
+                              }`}
+                            >
+                              {slot.muted ? (
+                                <VolumeX className="h-3.5 w-3.5" />
+                              ) : (
+                                <Volume2 className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDraft((p) => ({
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    app_audio_slots: (
+                                      p.audio.app_audio_slots ?? []
+                                    ).map((s, i) =>
+                                      i === idx
+                                        ? { ...s, enabled: !s.enabled }
+                                        : s
+                                    ),
+                                  },
+                                }));
+                              }}
+                              className={`rounded-lg px-2 py-1 text-[11px] font-semibold transition ${
+                                slot.enabled
+                                  ? "bg-emerald-500/20 text-emerald-300"
+                                  : "bg-white/[0.05] text-slate-400"
+                              }`}
+                            >
+                              {slot.enabled ? "ON" : "OFF"}
+                            </button>
+                            <button
+                              type="button"
+                              title={t.settings.appAudioRemove}
+                              onClick={() => {
+                                setDraft((p) => ({
+                                  ...p,
+                                  audio: {
+                                    ...p.audio,
+                                    app_audio_slots: (
+                                      p.audio.app_audio_slots ?? []
+                                    ).filter((_, i) => i !== idx),
+                                  },
+                                }));
+                              }}
+                              className="rounded-lg p-1.5 text-slate-400 transition hover:bg-rose-500/20 hover:text-rose-400"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </section>
 
               <section className={sectionCls}>

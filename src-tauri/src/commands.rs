@@ -8,12 +8,13 @@ use crate::ffmpeg_editor::{
 };
 use crate::state::{allow_directory_in_asset_scope, AppState};
 use crate::webhook::send_file_to_discord_webhook;
-use core_audio::{enumerate_capture_devices, enumerate_render_devices};
+use core_audio::{enumerate_capture_devices, enumerate_render_devices, list_active_audio_apps as list_active_audio_apps_impl};
 use core_capture::{enumerate_monitors, enumerate_windows};
 use core_types::{
-    AdvancedExportRequest, AppSettings, AudioDeviceInfo, CaptureTarget, ClipMetadata,
-    DaemonStateSnapshot, DiscordCompressRequest, EditorCacheStats, FrameScreenshotRequest,
-    GalleryFilter, MonitorInfo, RecorderCommand, SoundNotificationKind, TrimRequest, WindowInfo,
+    ActiveAudioAppInfo, AdvancedExportRequest, AppSettings, AudioDeviceInfo, CaptureTarget,
+    ClipMetadata, DaemonStateSnapshot, DiscordCompressRequest, EditorCacheStats,
+    FrameScreenshotRequest, GalleryFilter, MonitorInfo, RecorderCommand, SoundNotificationKind,
+    TrimRequest, WindowInfo,
 };
 use recorder_daemon::{
     cleanup_temp_dir, list_clip_metadata, load_clip_metadata, measure_editor_cache,
@@ -86,6 +87,11 @@ pub fn list_audio_output_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 #[tauri::command]
 pub fn list_audio_input_devices() -> Result<Vec<AudioDeviceInfo>, String> {
     enumerate_capture_devices().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_active_audio_apps() -> Result<Vec<ActiveAudioAppInfo>, String> {
+    list_active_audio_apps_impl().map_err(|e| e.to_string())
 }
 
 #[tauri::command]

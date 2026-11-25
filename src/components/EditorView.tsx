@@ -54,7 +54,7 @@ interface EditorViewProps {
 interface TrackMixState {
   kind: TrackKind;
   label: string;
-  volume: number; // 0.0 .. 2.0
+  volume: number; // 0.0 .. 5.0
   muted: boolean;
 }
 
@@ -67,16 +67,47 @@ interface EditHistoryState {
 
 function defaultMixList(
   waveforms: TrackWaveform[],
-  lang: AppLanguage
+  lang: AppLanguage,
+  settings: AppSettings | null
 ): TrackMixState[] {
   const stems = waveforms.filter((w) => w.kind !== "audio_mixed");
   const active = stems.length > 0 ? stems : waveforms;
-  return active.map((w) => ({
-    kind: w.kind,
-    label: trackDisplayName(w.kind, w.label, lang),
-    volume: 1.0,
-    muted: false,
-  }));
+  const applySettings = settings?.audio.apply_volumes_to_editor ?? true;
+
+  return active.map((w) => {
+    let volume = 1.0;
+    let muted = false;
+
+    if (applySettings && settings) {
+      if (w.kind === "audio_game") {
+        volume = settings.audio.game_volume;
+        muted = settings.audio.game_muted;
+      } else if (w.kind === "audio_mic") {
+        volume = settings.audio.mic_volume;
+        muted = settings.audio.mic_muted;
+      } else if (w.kind === "audio_secondary") {
+        volume = settings.audio.secondary_volume;
+        muted = settings.audio.secondary_muted;
+      } else if (typeof w.kind === "object" && "audio_app" in w.kind) {
+        const slots = settings.audio.app_audio_slots ?? [];
+        const labelLower = w.label.trim().toLowerCase();
+        const matched =
+          slots.find((s) => s.label.trim().toLowerCase() === labelLower) ??
+          slots[w.kind.audio_app];
+        if (matched) {
+          volume = matched.volume;
+          muted = matched.muted;
+        }
+      }
+    }
+
+    return {
+      kind: w.kind,
+      label: trackDisplayName(w.kind, w.label, lang),
+      volume: Math.min(5, Math.max(0, volume)),
+      muted,
+    };
+  });
 }
 
 export function EditorView({
@@ -92,6 +123,8 @@ export function EditorView({
   tRef.current = t;
   const langRef = useRef(lang);
   langRef.current = lang;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const playerWrapperRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -279,7 +312,9 @@ export function EditorView({
         );
         setDurationSec(exactDur);
         setSegments([{ start_sec: 0, end_sec: Number(exactDur.toFixed(2)) }]);
-        setTrackMix(defaultMixList(res.waveforms, langRef.current));
+        setTrackMix(
+          defaultMixList(res.waveforms, langRef.current, settingsRef.current)
+        );
 
         const stems = res.waveforms.filter((w) => w.kind !== "audio_mixed");
         const playable = stems.length > 0 ? stems : res.waveforms;
@@ -371,14 +406,14 @@ export function EditorView({
     };
   }, [cleanupStemAudio, clip?.file_path, mediaReloadNonce]);
 
-  // Apply live track volume (0..200%) & mute + masterVolume directly to Web Audio GainNodes.
+  // Apply live track volume (0..500%) & mute + masterVolume directly to Web Audio GainNodes.
   useEffect(() => {
     for (const mix of trackMix) {
       const node = stemNodesRef.current.get(trackKindKey(mix.kind));
       if (node) {
         node.gain.gain.value = mix.muted
           ? 0
-          : Math.min(2, Math.max(0, mix.volume)) * masterVolume;
+          : Math.min(5, Math.max(0, mix.volume)) * masterVolume;
       }
     }
     if (videoRef.current && !stemsReady) {
@@ -1127,7 +1162,7 @@ export function EditorView({
                           <input
                             type="range"
                             min={0}
-                            max={2}
+                            max={5}
                             step={0.05}
                             value={track.volume}
                             disabled={track.muted}
@@ -1144,7 +1179,7 @@ export function EditorView({
                             style={sliderFillStyle(
                               track.muted ? 0 : track.volume,
                               0,
-                              2
+                              5
                             )}
                             className="ikoch-slider w-14"
                           />

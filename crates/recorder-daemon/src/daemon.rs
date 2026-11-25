@@ -411,6 +411,7 @@ struct DaemonRuntime {
     audio_game_present: bool,
     audio_mic_present: bool,
     audio_sec_present: bool,
+    audio_app_tracks_present: Vec<(u8, String)>,
     buffering_requested: bool,
     pending_session_start: bool,
     privacy_mode: bool,
@@ -439,6 +440,17 @@ impl DaemonRuntime {
             return;
         }
         let target_pid = self.active_game.as_ref().map(|g| g.process_id);
+        let app_labels: Vec<(u8, String)> = self
+            .settings
+            .audio
+            .app_audio_slots
+            .iter()
+            .take(16)
+            .enumerate()
+            .filter(|(_, s)| s.enabled)
+            .map(|(i, s)| (i as u8, s.label.clone()))
+            .collect();
+        self.router.set_app_audio_labels(app_labels);
         match start_audio_pipeline(self.settings.audio.clone(), target_pid, self.clock) {
             Ok((handle, rx)) => {
                 let stop_flag = Arc::new(AtomicBool::new(false));
@@ -715,23 +727,40 @@ impl DaemonRuntime {
 
         match self.router.save_replay_clip(&path) {
             Ok(summary) => {
-                let (game_peak_dbfs, mic_peak_dbfs, output_device_name) =
+                let (mixed_peak_dbfs, game_peak_dbfs, mic_peak_dbfs, sec_peak_dbfs, app_peaks, output_device_name) =
                     if let Some(tel) = self.audio.as_ref().map(AudioPipelineHandle::telemetry) {
-                        (tel.game.peak_dbfs, tel.mic.peak_dbfs, tel.game.active_device)
+                        let app_peaks_str = tel
+                            .apps
+                            .iter()
+                            .map(|(idx, lbl, t)| format!("App[{idx}:{lbl}]={:.1}dBFS", t.peak_dbfs))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        (
+                            tel.mixed.peak_dbfs,
+                            tel.game.peak_dbfs,
+                            tel.mic.peak_dbfs,
+                            tel.secondary.as_ref().map(|s| s.peak_dbfs),
+                            app_peaks_str,
+                            tel.game.active_device,
+                        )
                     } else {
-                        (-100.0, -100.0, "None".to_string())
+                        (-100.0, -100.0, -100.0, None, String::new(), "None".to_string())
                     };
                 let active_mode = match &self.settings.audio.audio_output_mode {
                     AudioOutputMode::DefaultDevice => "Default",
                     AudioOutputMode::SpecificDevice(_) => "Specific",
+                    AudioOutputMode::GameProcessOnly => "GameProcessOnly",
                 };
                 info!(
-                    "Clip audio summary '{}' -> game_pkts={}, mic_pkts={}, game_peak_dbfs={:.1}, mic_peak_dbfs={:.1}, output_device_name='{}', active_mode={}",
+                    "Clip audio summary '{}' -> game_pkts={}, mic_pkts={}, mixed_peak_dbfs={:.1}, game_peak_dbfs={:.1}, mic_peak_dbfs={:.1}, sec_peak_dbfs={:?}, app_peaks=[{}], output_device_name='{}', active_mode={}",
                     summary.path.display(),
                     summary.game_pkts,
                     summary.mic_pkts,
+                    mixed_peak_dbfs,
                     game_peak_dbfs,
                     mic_peak_dbfs,
+                    sec_peak_dbfs,
+                    app_peaks,
                     output_device_name,
                     active_mode
                 );
@@ -1059,6 +1088,24 @@ impl DaemonRuntime {
                 cached_audio_path: None,
             });
         }
+        for (slot_idx, label) in &self.audio_app_tracks_present {
+            let default_volume = self
+                .settings
+                .audio
+                .app_audio_slots
+                .get(*slot_idx as usize)
+                .map_or(1.0, |s| s.volume);
+            audio_tracks.push(AudioTrackMetadata {
+                track_index: (audio_tracks.len() + 1) as u8,
+                kind: TrackKind::AudioApp(*slot_idx),
+                label: label.clone(),
+                codec: "aac".to_string(),
+                sample_rate: 48_000,
+                channels: 2,
+                default_volume,
+                cached_audio_path: None,
+            });
+        }
 
         ClipMetadata {
             id: Uuid::new_v4(),
@@ -1135,6 +1182,7 @@ impl DaemonRuntime {
         self.audio_game_present = false;
         self.audio_mic_present = false;
         self.audio_sec_present = false;
+        self.audio_app_tracks_present.clear();
         self.router.clear_audio_headers();
         if self.video_capture.is_some() {
             self.sync_audio_bridge();
@@ -1149,7 +1197,8 @@ impl DaemonRuntime {
         let video_restart_needed = video_pipeline_needs_restart(&self.settings, &new_settings);
         let audio_pipeline_changed = new_settings.audio.separate_tracks
             != self.settings.audio.separate_tracks
-            || new_settings.audio.aac_bitrate_kbps != self.settings.audio.aac_bitrate_kbps;
+            || new_settings.audio.aac_bitrate_kbps != self.settings.audio.aac_bitrate_kbps
+            || new_settings.audio.app_audio_slots != self.settings.audio.app_audio_slots;
         let replay_enabled_changed =
             new_settings.replay_buffer.enabled != self.settings.replay_buffer.enabled;
 
@@ -1522,6 +1571,7 @@ fn run_coordinator_loop(
         audio_game_present: false,
         audio_mic_present: false,
         audio_sec_present: false,
+        audio_app_tracks_present: Vec::new(),
         buffering_requested: buffering_default,
         pending_session_start: false,
         privacy_mode: false,
@@ -1601,6 +1651,9 @@ fn run_coordinator_loop(
                 }
             }
             recv(detector_tick) -> _ => {
+                if let Some(a) = &rt.audio {
+                    a.poll_idle_app_slots();
+                }
                 match rt.game_detector.poll() {
                     GameDetectionTransition::Detected(game) => {
                         info!("Game detected: {} ({})", game.display_name, game.executable_name);
@@ -1689,7 +1742,21 @@ fn process_pipeline_msg(rt: &mut DaemonRuntime, msg: PipelineMsg) {
                 TrackKind::AudioGame => rt.audio_game_present = true,
                 TrackKind::AudioMic => rt.audio_mic_present = true,
                 TrackKind::AudioSecondary => rt.audio_sec_present = true,
-                TrackKind::AudioApp(_) | TrackKind::Video => {}
+                TrackKind::AudioApp(idx) => {
+                    let label = rt
+                        .settings
+                        .audio
+                        .app_audio_slots
+                        .get(idx as usize)
+                        .map(|s| s.label.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| format!("App {}", idx + 1));
+                    if !rt.audio_app_tracks_present.iter().any(|(i, _)| *i == idx) {
+                        rt.audio_app_tracks_present.push((idx, label));
+                        rt.audio_app_tracks_present.sort_by_key(|(i, _)| *i);
+                    }
+                }
+                TrackKind::Video => {}
             }
             rt.router.update_audio_header(hdr);
         }

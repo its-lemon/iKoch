@@ -322,7 +322,7 @@ pub struct TextOverlaySpec {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct TrackMixSpec {
     pub kind: TrackKind,
-    /// Linear gain multiplier (`0.0..=2.0` -> `0%..200%`).
+    /// Linear gain multiplier (`0.0..=5.0` -> `0%..500%`).
     pub volume: f32,
     pub muted: bool,
 }

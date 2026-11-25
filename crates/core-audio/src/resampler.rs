@@ -79,7 +79,7 @@ impl Stereo48kResampler {
             bits_per_sample,
             valid_bits_per_sample,
             block_align: safe_align,
-            volume: volume.clamp(0.0, 2.0),
+            volume: volume.clamp(0.0, 5.0),
             muted,
             max_abs_sample: 0.0,
             in_stereo_queue: VecDeque::with_capacity(max_in * TARGET_CHANNELS * 4),
@@ -91,7 +91,7 @@ impl Stereo48kResampler {
 
     /// Updates gain/mute state dynamically without rebuilding the resampler.
     pub fn set_volume_and_mute(&mut self, volume: f32, muted: bool) {
-        self.volume = volume.clamp(0.0, 2.0);
+        self.volume = volume.clamp(0.0, 5.0);
         self.muted = muted;
     }
 

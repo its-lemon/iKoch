@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type {
+  ActiveAudioAppInfo,
   AdvancedExportRequest,
   AppSettings,
   AudioDeviceInfo,
@@ -43,6 +44,9 @@ export const api = {
 
   listAudioInputDevices: () =>
     invoke<AudioDeviceInfo[]>("list_audio_input_devices"),
+
+  listActiveAudioApps: () =>
+    invoke<ActiveAudioAppInfo[]>("list_active_audio_apps"),
 
   sendRecorderCommand: (command: RecorderCommand) =>
     invoke<void>("send_recorder_command", { command }),

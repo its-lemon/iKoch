@@ -358,6 +358,16 @@ export const en: Translations = {
     gameVolume: "Game Volume",
     micVolume: "Microphone Volume",
     secondaryVolume: "2nd Channel Volume",
+    applyVolumesToEditor: "Use these volumes by default in Editor",
+    appAudioTitle: "Per-Application Audio Separation",
+    appAudioAddChannel: "+ Add channel",
+    appAudioPickRunning: "+ Pick from running apps",
+    appAudioEmpty:
+      "No app channels added. Click '+ Add channel' or '+ Pick from running apps' to record Discord, music, or browsers as separate tracks.",
+    appAudioNoRunning: "No active audio apps found",
+    appAudioSlotNamePlaceholder: "Channel name (e.g. Discord)",
+    appAudioProcessesPlaceholder: "Processes comma-separated (e.g. Discord.exe)",
+    appAudioRemove: "Remove",
     micProcessingTitle: "Microphone Processing: RNNoise & Activation Mode",
     rnnoiseLabel: "Neural Noise Suppression (RNNoise)",
     rnnoiseHint: "Removes keyboard, fan, and static noise from voice",
@@ -543,8 +553,12 @@ export const en: Translations = {
         "Microphone recorded to its own stem (Track 3) so you can adjust voice volume independently in the Editor.",
       separateTracks:
         "Saves both a ready-to-play mixed track (Track 1) and separate Game/Mic stems inside the MP4.",
+      appAudio:
+        "Captures audio from selected apps (Discord, music, browser) into separate MP4 tracks via Windows Process Loopback. Uses zero resources when the app is not running or the channel is disabled.",
       volumes:
         "Controls the mix balance written into Track 1 (played by default in Discord and media players).",
+      applyVolumesToEditor:
+        "When opening a clip in the Editor, initializes each track's volume slider and Mute state from these settings (including 0–500% app boosts).",
       rnnoise:
         "Neural noise suppression (RNNoise) removes keyboard clicks, fan hum, and static from your microphone only.",
       noiseGate:

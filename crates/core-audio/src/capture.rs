@@ -6,18 +6,21 @@
 
 use crate::aac_encoder::{elapsed_48k_frames, sample_index_to_pts_us, MfAacEncoder};
 use crate::denoise::{mix_stereo_blocks_soft_clip, MicNoiseProcessor};
+use crate::process_loopback::{
+    find_best_pid_for_processes, is_pid_running, query_process_exe_name, ProcessLoopbackStream,
+};
 use crate::resampler::{
     float_frame_to_i16, linear_to_dbfs, Stereo48kResampler, AAC_FRAME_SAMPLES, TARGET_CHANNELS,
     TARGET_SAMPLE_RATE_HZ,
 };
 use core_types::{
-    AudioError, AudioOutputMode, AudioSettings, AudioStreamHeader, MediaPacket, MicActivationMode,
-    MicDeviceConfig, MonotonicClock, TrackKind, AUDIO_CHUNK_CHANNEL_CAPACITY,
+    AppAudioSlotConfig, AudioError, AudioOutputMode, AudioSettings, AudioStreamHeader, MediaPacket,
+    MicActivationMode, MicDeviceConfig, MonotonicClock, TrackKind, AUDIO_CHUNK_CHANNEL_CAPACITY,
 };
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 use parking_lot::{Condvar, Mutex};
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -298,6 +301,7 @@ pub struct AudioPipelineTelemetry {
     pub game: AudioTrackTelemetry,
     pub mic: AudioTrackTelemetry,
     pub secondary: Option<AudioTrackTelemetry>,
+    pub apps: Vec<(u8, String, AudioTrackTelemetry)>,
 }
 
 /// Hot-reconfiguration commands for the multi-track audio pipeline.
@@ -333,19 +337,32 @@ pub enum AudioOutputEvent {
     RecoverableWarning(String),
 }
 
+struct AppSlotRuntime {
+    slot_idx: u8,
+    config: AppAudioSlotConfig,
+    telemetry: Arc<TrackTelemetryShared>,
+    running: Arc<AtomicBool>,
+    cmd_tx: Option<Sender<SourceControl>>,
+}
+
 /// Handle controlling WASAPI source threads and the central synchronized mixer/AAC encoder thread.
 pub struct AudioPipelineHandle {
     game_cmd_tx: Sender<SourceControl>,
     mic_cmd_tx: Sender<SourceControl>,
     sec_cmd_tx: Sender<SourceControl>,
     mixer_cmd_tx: Sender<MixerControl>,
+    pcm_tx: Sender<CapturedBlock>,
+    out_tx: Sender<AudioOutputEvent>,
+    clock: MonotonicClock,
+    base_pts_us: Arc<AtomicI64>,
     stop_flag: Arc<AtomicBool>,
     mixed_telemetry: Arc<TrackTelemetryShared>,
     game_telemetry: Arc<TrackTelemetryShared>,
     mic_telemetry: Arc<TrackTelemetryShared>,
     sec_telemetry: Arc<TrackTelemetryShared>,
     has_secondary_track: Arc<AtomicBool>,
-    threads: Vec<JoinHandle<()>>,
+    app_slots: Mutex<Vec<AppSlotRuntime>>,
+    threads: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl AudioPipelineHandle {
@@ -459,7 +476,63 @@ impl AudioPipelineHandle {
         }
     }
 
-    /// Returns a live lock-free telemetry snapshot across `Mixed`, `Game`, `Mic`, and `Secondary`.
+    /// Polls idle enabled app slots and spawns capture threads only when a matching process is running.
+    pub fn poll_idle_app_slots(&self) {
+        if self.stop_flag.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut slots = self.app_slots.lock();
+        let mut threads = self.threads.lock();
+        for slot in slots.iter_mut() {
+            if !slot.config.enabled
+                || slot.config.process_names.is_empty()
+                || slot.running.load(Ordering::Relaxed)
+            {
+                continue;
+            }
+            if let Ok(Some(session)) = find_best_pid_for_processes(&slot.config.process_names) {
+                let (cmd_tx, cmd_rx) = bounded(8);
+                slot.running.store(true, Ordering::Relaxed);
+                slot.cmd_tx = Some(cmd_tx);
+                let slot_idx = slot.slot_idx;
+                let process_names = slot.config.process_names.clone();
+                let label = slot.config.label.clone();
+                let tel = Arc::clone(&slot.telemetry);
+                let running = Arc::clone(&slot.running);
+                let pcm_tx = self.pcm_tx.clone();
+                let warn_tx = self.out_tx.clone();
+                let clock = self.clock;
+                let base_pts = Arc::clone(&self.base_pts_us);
+                let stop = Arc::clone(&self.stop_flag);
+                let initial_pid = session.pid;
+                if let Ok(handle) = thread::Builder::new()
+                    .name(format!("rustclip-audio-app-{slot_idx}"))
+                    .spawn(move || {
+                        run_app_slot_capture_loop(
+                            slot_idx,
+                            label,
+                            process_names,
+                            initial_pid,
+                            base_pts,
+                            clock,
+                            cmd_rx,
+                            pcm_tx,
+                            warn_tx,
+                            tel,
+                            running,
+                            stop,
+                        );
+                    })
+                {
+                    threads.push(handle);
+                } else {
+                    slot.running.store(false, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+
+    /// Returns a live lock-free telemetry snapshot across `Mixed`, `Game`, `Mic`, `Secondary`, and `App` tracks.
     #[must_use]
     pub fn telemetry(&self) -> AudioPipelineTelemetry {
         let secondary = if self.has_secondary_track.load(Ordering::Relaxed) {
@@ -467,11 +540,19 @@ impl AudioPipelineHandle {
         } else {
             None
         };
+        let apps = self
+            .app_slots
+            .lock()
+            .iter()
+            .filter(|s| s.config.enabled)
+            .map(|s| (s.slot_idx, s.config.label.clone(), s.telemetry.snapshot()))
+            .collect();
         AudioPipelineTelemetry {
             mixed: self.mixed_telemetry.snapshot(),
             game: self.game_telemetry.snapshot(),
             mic: self.mic_telemetry.snapshot(),
             secondary,
+            apps,
         }
     }
 
@@ -485,8 +566,14 @@ impl AudioPipelineHandle {
         let _ = self.game_cmd_tx.send(SourceControl::Stop);
         let _ = self.mic_cmd_tx.send(SourceControl::Stop);
         let _ = self.sec_cmd_tx.send(SourceControl::Stop);
+        for slot in self.app_slots.lock().iter() {
+            if let Some(tx) = slot.cmd_tx.as_ref() {
+                let _ = tx.send(SourceControl::Stop);
+            }
+        }
         let _ = self.mixer_cmd_tx.send(MixerControl::Stop);
-        for h in self.threads.drain(..) {
+        let drained: Vec<JoinHandle<()>> = self.threads.lock().drain(..).collect();
+        for h in drained {
             let _ = h.join();
         }
     }
@@ -503,6 +590,7 @@ enum SourceSlot {
     Game,
     Mic,
     Secondary,
+    App(u8),
 }
 
 #[derive(Debug, Clone)]
@@ -679,7 +767,68 @@ pub fn start_audio_pipeline(
         threads.push(handle);
     }
 
-    drop(pcm_tx);
+    let base_pts_atomic = Arc::new(AtomicI64::new(fallback_pts_us));
+
+    let mut app_slots_runtime = Vec::new();
+    let mut app_slots_mixer = Vec::new();
+    for (idx, slot_cfg) in settings.app_audio_slots.iter().take(16).enumerate() {
+        let slot_idx = idx as u8;
+        let tel = Arc::new(TrackTelemetryShared::new(&format!(
+            "App: {}",
+            slot_cfg.label
+        )));
+        let running = Arc::new(AtomicBool::new(false));
+        let mut cmd_tx_opt = None;
+
+        if slot_cfg.enabled && !slot_cfg.process_names.is_empty() {
+            if let Ok(Some(session)) = find_best_pid_for_processes(&slot_cfg.process_names) {
+                let (cmd_tx, cmd_rx) = bounded(8);
+                running.store(true, Ordering::Relaxed);
+                cmd_tx_opt = Some(cmd_tx);
+                let process_names = slot_cfg.process_names.clone();
+                let label = slot_cfg.label.clone();
+                let tel_c = Arc::clone(&tel);
+                let run_c = Arc::clone(&running);
+                let tx_c = pcm_tx.clone();
+                let warn_c = out_tx.clone();
+                let base_c = Arc::clone(&base_pts_atomic);
+                let stop_c = Arc::clone(&stop_flag);
+                let initial_pid = session.pid;
+                if let Ok(handle) = thread::Builder::new()
+                    .name(format!("rustclip-audio-app-{slot_idx}"))
+                    .spawn(move || {
+                        run_app_slot_capture_loop(
+                            slot_idx,
+                            label,
+                            process_names,
+                            initial_pid,
+                            base_c,
+                            clock,
+                            cmd_rx,
+                            tx_c,
+                            warn_c,
+                            tel_c,
+                            run_c,
+                            stop_c,
+                        );
+                    })
+                {
+                    threads.push(handle);
+                } else {
+                    running.store(false, Ordering::Relaxed);
+                }
+            }
+        }
+
+        app_slots_runtime.push(AppSlotRuntime {
+            slot_idx,
+            config: slot_cfg.clone(),
+            telemetry: Arc::clone(&tel),
+            running,
+            cmd_tx: cmd_tx_opt,
+        });
+        app_slots_mixer.push((slot_idx, slot_cfg.clone(), tel));
+    }
 
     {
         let stop = Arc::clone(&stop_flag);
@@ -690,21 +839,25 @@ pub fn start_audio_pipeline(
         let barrier = Arc::clone(&startup_barrier);
         let sec_flag = Arc::clone(&has_secondary_track);
         let cfg = settings.clone();
+        let out_tx_m = out_tx.clone();
+        let base_pts_m = Arc::clone(&base_pts_atomic);
         let handle = thread::Builder::new()
             .name("rustclip-audio-mixer".to_string())
             .spawn(move || {
                 run_mixer_loop(
                     cfg,
                     barrier,
+                    base_pts_m,
                     clock,
                     pcm_rx,
                     mixer_cmd_rx,
-                    out_tx,
+                    out_tx_m,
                     mixed_tel,
                     game_tel,
                     mic_tel,
                     sec_tel,
                     sec_flag,
+                    app_slots_mixer,
                     stop,
                 );
             })
@@ -718,13 +871,18 @@ pub fn start_audio_pipeline(
             mic_cmd_tx,
             sec_cmd_tx,
             mixer_cmd_tx,
+            pcm_tx,
+            out_tx,
+            clock,
+            base_pts_us: base_pts_atomic,
             stop_flag,
             mixed_telemetry,
             game_telemetry,
             mic_telemetry,
             sec_telemetry,
             has_secondary_track,
-            threads,
+            app_slots: Mutex::new(app_slots_runtime),
+            threads: Mutex::new(threads),
         },
         out_rx,
     ))
@@ -835,20 +993,48 @@ fn run_source_capture_loop(
     });
 
     let mut stream: Option<OpenedWasapiStream> = None;
+    let mut proc_stream: Option<ProcessLoopbackStream> = None;
+    let mut proc_pcm_buf: Vec<f32> = Vec::with_capacity(STEREO_BLOCK_SAMPLES * 4);
+    let mut proc_exe_name: Option<String> = None;
+    let mut last_pid_recheck = Instant::now();
     let mut last_open_attempt = Instant::now() - Duration::from_secs(10);
     let mut force_reopen = false;
 
     if !role.is_intentionally_idle() {
         last_open_attempt = Instant::now();
-        match open_wasapi_stream(&role) {
-            Ok(opened) => {
-                info!("Opened audio capture ({:?}): {}", slot, opened.description);
-                telemetry.set_active_device(opened.description.clone());
-                stream = Some(opened);
+        if let SourceRole::GameLoopback {
+            mode: AudioOutputMode::GameProcessOnly,
+            target_pid,
+        } = &role
+        {
+            if let Some(pid) = *target_pid {
+                match ProcessLoopbackStream::open(pid) {
+                    Ok(ps) => {
+                        let exe = query_process_exe_name(pid);
+                        info!("Opened GameProcessOnly loopback: {exe} (PID={pid})");
+                        telemetry.set_active_device(format!("Process Loopback: {exe} (PID {pid})"));
+                        proc_exe_name = (!exe.starts_with('<')).then_some(exe);
+                        proc_stream = Some(ps);
+                    }
+                    Err(err) => {
+                        debug!("Process loopback initial open deferred (PID={pid}): {err}");
+                        telemetry.set_active_device(format!("Process Loopback deferred ({err})"));
+                    }
+                }
+            } else {
+                telemetry.set_active_device("Process Loopback (Waiting for Game PID)");
             }
-            Err(err) => {
-                debug!("WASAPI initial open deferred for {:?}: {}", slot, err);
-                telemetry.set_active_device(format!("Unavailable ({err})"));
+        } else {
+            match open_wasapi_stream(&role) {
+                Ok(opened) => {
+                    info!("Opened audio capture ({:?}): {}", slot, opened.description);
+                    telemetry.set_active_device(opened.description.clone());
+                    stream = Some(opened);
+                }
+                Err(err) => {
+                    debug!("WASAPI initial open deferred for {:?}: {}", slot, err);
+                    telemetry.set_active_device(format!("Unavailable ({err})"));
+                }
             }
         }
     } else {
@@ -895,9 +1081,16 @@ fn run_source_capture_loop(
                     }
                 }
                 Ok(SourceControl::SetTargetProcessId(new_pid)) => {
-                    if let SourceRole::GameLoopback { target_pid, .. } = &mut role {
+                    if let SourceRole::GameLoopback {
+                        mode,
+                        target_pid,
+                    } = &mut role
+                    {
                         if *target_pid != new_pid {
                             *target_pid = new_pid;
+                            if *mode == AudioOutputMode::GameProcessOnly {
+                                force_reopen = true;
+                            }
                         }
                     }
                 }
@@ -966,40 +1159,151 @@ fn run_source_capture_loop(
             continue;
         }
 
+        let is_proc_mode = matches!(
+            &role,
+            SourceRole::GameLoopback {
+                mode: AudioOutputMode::GameProcessOnly,
+                ..
+            }
+        );
+
         if force_reopen
-            || (stream.is_none() && last_open_attempt.elapsed() >= WASAPI_RECONNECT_BACKOFF)
+            || ((!is_proc_mode && stream.is_none() || is_proc_mode && proc_stream.is_none())
+                && last_open_attempt.elapsed() >= WASAPI_RECONNECT_BACKOFF)
         {
             if let Some(old) = stream.take() {
                 let _ = old.audio_client.stop_stream();
             }
+            proc_stream = None;
+            proc_pcm_buf.clear();
+            proc_exe_name = None;
             force_reopen = false;
             last_open_attempt = Instant::now();
 
-            match open_wasapi_stream(&role) {
-                Ok(mut opened) => {
-                    opened.drain_stale_and_reset_resampler();
-                    info!("Opened audio capture ({:?}): {}", slot, opened.description);
-                    telemetry.set_active_device(opened.description.clone());
-                    last_real_packet_at = Instant::now();
-                    silent_since = None;
-                    silent_blocks_emitted = 0;
-                    let target_blocks = elapsed_48k_frames(base_pts_us, clock.now_us())
-                        / (AAC_FRAME_SAMPLES as u64);
-                    if target_blocks > block_idx {
-                        block_idx = target_blocks;
+            if let SourceRole::GameLoopback {
+                mode: AudioOutputMode::GameProcessOnly,
+                target_pid,
+            } = &role
+            {
+                if let Some(pid) = *target_pid {
+                    match ProcessLoopbackStream::open(pid) {
+                        Ok(ps) => {
+                            let exe = query_process_exe_name(pid);
+                            info!("Opened GameProcessOnly loopback: {exe} (PID={pid})");
+                            telemetry
+                                .set_active_device(format!("Process Loopback: {exe} (PID {pid})"));
+                            proc_exe_name = (!exe.starts_with('<')).then_some(exe);
+                            last_real_packet_at = Instant::now();
+                            silent_since = None;
+                            silent_blocks_emitted = 0;
+                            let target_blocks = elapsed_48k_frames(base_pts_us, clock.now_us())
+                                / (AAC_FRAME_SAMPLES as u64);
+                            if target_blocks > block_idx {
+                                block_idx = target_blocks;
+                            }
+                            proc_stream = Some(ps);
+                        }
+                        Err(err) => {
+                            debug!("Process loopback open deferred (PID={pid}): {err}");
+                            telemetry.set_active_device(format!("Process Loopback deferred ({err})"));
+                        }
                     }
-                    stream = Some(opened);
+                } else {
+                    telemetry.set_active_device("Process Loopback (Waiting for Game PID)");
                 }
-                Err(err) => {
-                    debug!("WASAPI open deferred for {:?}: {}", slot, err);
-                    telemetry.set_active_device(format!("Unavailable ({err})"));
+            } else {
+                match open_wasapi_stream(&role) {
+                    Ok(mut opened) => {
+                        opened.drain_stale_and_reset_resampler();
+                        info!("Opened audio capture ({:?}): {}", slot, opened.description);
+                        telemetry.set_active_device(opened.description.clone());
+                        last_real_packet_at = Instant::now();
+                        silent_since = None;
+                        silent_blocks_emitted = 0;
+                        let target_blocks = elapsed_48k_frames(base_pts_us, clock.now_us())
+                            / (AAC_FRAME_SAMPLES as u64);
+                        if target_blocks > block_idx {
+                            block_idx = target_blocks;
+                        }
+                        stream = Some(opened);
+                    }
+                    Err(err) => {
+                        debug!("WASAPI open deferred for {:?}: {}", slot, err);
+                        telemetry.set_active_device(format!("Unavailable ({err})"));
+                    }
                 }
             }
         }
 
         // 3. Drain all buffered WASAPI capture packets (single get_next_packet_size per packet).
         let mut device_disconnected = false;
-        if let Some(s) = stream.as_mut() {
+        if let Some(ps) = proc_stream.as_mut() {
+            match ps.wait_and_read(20, &mut proc_pcm_buf) {
+                Ok((total_frames, real_frames)) => {
+                    if total_frames > 0 {
+                        let was_in_silence = silent_since.is_some();
+                        last_real_packet_at = Instant::now();
+                        silent_since = None;
+                        silent_blocks_emitted = 0;
+                        if was_in_silence && proc_pcm_buf.len() < STEREO_BLOCK_SAMPLES {
+                            let target_wall_blocks =
+                                elapsed_48k_frames(base_pts_us, clock.now_us())
+                                    / (AAC_FRAME_SAMPLES as u64);
+                            if target_wall_blocks > block_idx.saturating_add(2) {
+                                block_idx = target_wall_blocks.saturating_sub(1);
+                            }
+                        }
+                        telemetry.add_real_frames(total_frames);
+                    }
+                    while proc_pcm_buf.len() >= STEREO_BLOCK_SAMPLES {
+                        let mut f32_block = [0.0f32; STEREO_BLOCK_SAMPLES];
+                        f32_block.copy_from_slice(&proc_pcm_buf[..STEREO_BLOCK_SAMPLES]);
+                        proc_pcm_buf.drain(..STEREO_BLOCK_SAMPLES);
+                        telemetry.observe_peak_f32(&f32_block);
+                        let this_idx = block_idx;
+                        block_idx = block_idx.saturating_add(1);
+                        let _ = pcm_tx.try_send(CapturedBlock {
+                            slot,
+                            block_idx: this_idx,
+                            samples: f32_block,
+                        });
+                    }
+                    if last_pid_recheck.elapsed() >= Duration::from_millis(400) {
+                        last_pid_recheck = Instant::now();
+                        if let Some(exe) = proc_exe_name.as_ref() {
+                            if let Ok(Some(best)) =
+                                find_best_pid_for_processes(std::slice::from_ref(exe))
+                            {
+                                if best.pid != ps.pid()
+                                    && (best.peak > 0.0001
+                                        && real_frames == 0
+                                        || !is_pid_running(ps.pid()))
+                                {
+                                    info!(
+                                        "GameProcessOnly re-attaching {} PID {} -> {}",
+                                        exe,
+                                        ps.pid(),
+                                        best.pid
+                                    );
+                                    if let Ok(new_ps) = ProcessLoopbackStream::open(best.pid) {
+                                        proc_stream = Some(new_ps);
+                                        telemetry.set_active_device(format!(
+                                            "Process Loopback: {} (PID {})",
+                                            exe, best.pid
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    warn!("GameProcessOnly loopback error: {err}");
+                    proc_stream = None;
+                    device_disconnected = true;
+                }
+            }
+        } else if let Some(s) = stream.as_mut() {
             if let Some(ev) = s.event_handle.as_ref() {
                 let _ = ev.wait_for_event(25);
             } else {
@@ -1110,7 +1414,9 @@ fn run_source_capture_loop(
         }
 
         // 4. Real-Instant silence injection only after >= 110 ms of genuine WASAPI inactivity.
-        if stream.is_none() || last_real_packet_at.elapsed() >= IDLE_SILENCE_THRESHOLD {
+        if (stream.is_none() && proc_stream.is_none())
+            || last_real_packet_at.elapsed() >= IDLE_SILENCE_THRESHOLD
+        {
             let pending_resampler_blocks = stream.as_ref().map_or(0, |s| {
                 let q = s.resampler.queued_input_frames() as u64;
                 let in_rate = u64::from(s.resampler.input_sample_rate().max(1));
@@ -1191,10 +1497,155 @@ struct MixerConfigState {
     secondary_muted: bool,
 }
 
+struct AppSlotMixerState {
+    slot_idx: u8,
+    volume: f32,
+    muted: bool,
+    enabled: bool,
+    queue: BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
+    encoder: Option<MfAacEncoder>,
+    telemetry: Arc<TrackTelemetryShared>,
+    last_block_at: Option<Instant>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_app_slot_capture_loop(
+    slot_idx: u8,
+    label: String,
+    process_names: Vec<String>,
+    initial_pid: u32,
+    base_pts_atomic: Arc<AtomicI64>,
+    clock: MonotonicClock,
+    cmd_rx: Receiver<SourceControl>,
+    pcm_tx: Sender<CapturedBlock>,
+    warn_tx: Sender<AudioOutputEvent>,
+    telemetry: Arc<TrackTelemetryShared>,
+    running: Arc<AtomicBool>,
+    stop_flag: Arc<AtomicBool>,
+) {
+    struct RunningGuard(Arc<AtomicBool>);
+    impl Drop for RunningGuard {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::Relaxed);
+        }
+    }
+    let _running_guard = RunningGuard(running);
+    let _thread_guard = AudioThreadGuard::enter_pro_audio(true);
+
+    let mut proc_stream = match ProcessLoopbackStream::open(initial_pid) {
+        Ok(ps) => {
+            let exe = query_process_exe_name(initial_pid);
+            info!("App slot '{label}' attached to {exe} (PID={initial_pid})");
+            telemetry.set_active_device(format!("{label}: {exe} (PID {initial_pid})"));
+            Some(ps)
+        }
+        Err(err) => {
+            let _ = warn_tx.try_send(AudioOutputEvent::RecoverableWarning(format!(
+                "App slot '{label}' initial open failed (PID={initial_pid}): {err}"
+            )));
+            None
+        }
+    };
+
+    let mut pcm_buf: Vec<f32> = Vec::with_capacity(STEREO_BLOCK_SAMPLES * 4);
+    let base_pts_us = base_pts_atomic.load(Ordering::Relaxed);
+    let mut block_idx =
+        elapsed_48k_frames(base_pts_us, clock.now_us()) / (AAC_FRAME_SAMPLES as u64);
+    let mut last_recheck = Instant::now();
+    let mut last_nonzero = Instant::now();
+    let mut last_open_attempt = Instant::now();
+
+    while !stop_flag.load(Ordering::Relaxed) {
+        match cmd_rx.try_recv() {
+            Ok(SourceControl::Stop) | Err(TryRecvError::Disconnected) => return,
+            Ok(_) | Err(TryRecvError::Empty) => {}
+        }
+
+        if let Some(ps) = proc_stream.as_mut() {
+            match ps.wait_and_read(20, &mut pcm_buf) {
+                Ok((total_frames, real_frames)) => {
+                    if total_frames > 0 {
+                        telemetry.add_real_frames(total_frames);
+                    }
+                    if real_frames > 0 {
+                        last_nonzero = Instant::now();
+                    }
+                    let target_wall = elapsed_48k_frames(
+                        base_pts_atomic.load(Ordering::Relaxed),
+                        clock.now_us(),
+                    ) / (AAC_FRAME_SAMPLES as u64);
+                    if target_wall > block_idx.saturating_add(4) {
+                        block_idx = target_wall.saturating_sub(1);
+                    }
+                    while pcm_buf.len() >= STEREO_BLOCK_SAMPLES {
+                        let mut f32_block = [0.0f32; STEREO_BLOCK_SAMPLES];
+                        f32_block.copy_from_slice(&pcm_buf[..STEREO_BLOCK_SAMPLES]);
+                        pcm_buf.drain(..STEREO_BLOCK_SAMPLES);
+                        telemetry.observe_peak_f32(&f32_block);
+                        let this_idx = block_idx;
+                        block_idx = block_idx.saturating_add(1);
+                        let _ = pcm_tx.try_send(CapturedBlock {
+                            slot: SourceSlot::App(slot_idx),
+                            block_idx: this_idx,
+                            samples: f32_block,
+                        });
+                    }
+                }
+                Err(err) => {
+                    warn!("App slot '{label}' loopback error: {err}");
+                    proc_stream = None;
+                    last_open_attempt = Instant::now() - Duration::from_millis(500);
+                }
+            }
+        } else {
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        if last_recheck.elapsed() >= Duration::from_millis(400) {
+            last_recheck = Instant::now();
+            match find_best_pid_for_processes(&process_names) {
+                Ok(Some(best)) => {
+                    let current_pid = proc_stream.as_ref().map(ProcessLoopbackStream::pid);
+                    let current_idle = last_nonzero.elapsed() >= Duration::from_millis(400);
+                    let need_switch = match current_pid {
+                        None => last_open_attempt.elapsed() >= Duration::from_millis(500),
+                        Some(pid) => {
+                            best.pid != pid
+                                && (best.peak > 0.0001 && current_idle || !is_pid_running(pid))
+                        }
+                    };
+                    if need_switch {
+                        last_open_attempt = Instant::now();
+                        if let Ok(new_ps) = ProcessLoopbackStream::open(best.pid) {
+                            let exe = query_process_exe_name(best.pid);
+                            info!("App slot '{label}' attached to {exe} (PID={})", best.pid);
+                            telemetry.set_active_device(format!("{label}: {exe} (PID {})", best.pid));
+                            pcm_buf.clear();
+                            proc_stream = Some(new_ps);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    let still_alive = proc_stream
+                        .as_ref()
+                        .is_some_and(|ps| is_pid_running(ps.pid()));
+                    if !still_alive {
+                        info!("App slot '{label}' process exited; stopping capture thread (idle 0%)");
+                        telemetry.set_active_device(format!("{label} (Idle)"));
+                        return;
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_mixer_loop(
     settings: AudioSettings,
     startup: Arc<StartupBarrier>,
+    base_pts_atomic: Arc<AtomicI64>,
     clock: MonotonicClock,
     pcm_rx: Receiver<CapturedBlock>,
     cmd_rx: Receiver<MixerControl>,
@@ -1204,6 +1655,7 @@ fn run_mixer_loop(
     mic_telemetry: Arc<TrackTelemetryShared>,
     sec_telemetry: Arc<TrackTelemetryShared>,
     has_secondary_track: Arc<AtomicBool>,
+    app_slots_init: Vec<(u8, AppAudioSlotConfig, Arc<TrackTelemetryShared>)>,
     stop_flag: Arc<AtomicBool>,
 ) {
     let _thread_guard = AudioThreadGuard::enter_pro_audio(true);
@@ -1294,8 +1746,45 @@ fn run_mixer_loop(
         None
     };
 
+    let mut app_mix: Vec<AppSlotMixerState> = app_slots_init
+        .into_iter()
+        .map(|(slot_idx, slot_cfg, tel)| {
+            let encoder = if cfg.separate_tracks && slot_cfg.enabled {
+                let kbps =
+                    target_aac_bitrate_kbps(TrackKind::AudioApp(slot_idx), settings.aac_bitrate_kbps);
+                match MfAacEncoder::new(TrackKind::AudioApp(slot_idx), kbps) {
+                    Ok(enc) => {
+                        let _ = out_tx.send(AudioOutputEvent::StreamHeader(
+                            enc.stream_header().clone(),
+                        ));
+                        Some(enc)
+                    }
+                    Err(err) => {
+                        let _ = out_tx.try_send(AudioOutputEvent::RecoverableWarning(format!(
+                            "AAC encoder init failed for AudioApp({slot_idx}): {err}"
+                        )));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            AppSlotMixerState {
+                slot_idx,
+                volume: slot_cfg.volume.clamp(0.0, 5.0),
+                muted: slot_cfg.muted,
+                enabled: slot_cfg.enabled,
+                queue: BTreeMap::new(),
+                encoder,
+                telemetry: tel,
+                last_block_at: None,
+            }
+        })
+        .collect();
+
     // Synchronize timeline epoch with all active WASAPI threads before draining block #0.
     let base_pts_us = startup.wait_for_base_pts(clock, STARTUP_BARRIER_TIMEOUT);
+    base_pts_atomic.store(base_pts_us, Ordering::Relaxed);
 
     let mut game_queue: BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]> = BTreeMap::new();
     let mut mic_queue: BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]> = BTreeMap::new();
@@ -1314,6 +1803,7 @@ fn run_mixer_loop(
                         &mut enc_game,
                         &mut enc_mic,
                         &mut enc_sec,
+                        &mut app_mix,
                         base_pts_us,
                         next_mix_idx,
                         &mixed_telemetry,
@@ -1330,10 +1820,10 @@ fn run_mixer_loop(
                     mic_volume,
                     secondary_volume,
                 }) => {
-                    cfg.game_volume = game_volume.clamp(0.0, 2.0);
-                    cfg.mic_volume = mic_volume.clamp(0.0, 2.0);
+                    cfg.game_volume = game_volume.clamp(0.0, 5.0);
+                    cfg.mic_volume = mic_volume.clamp(0.0, 5.0);
                     if let Some(sec_vol) = secondary_volume {
-                        cfg.secondary_volume = sec_vol.clamp(0.0, 2.0);
+                        cfg.secondary_volume = sec_vol.clamp(0.0, 5.0);
                     }
                 }
                 Ok(MixerControl::SetGameMuted(muted)) => cfg.game_muted = muted,
@@ -1356,6 +1846,7 @@ fn run_mixer_loop(
                     &mut game_queue,
                     &mut mic_queue,
                     &mut sec_queue,
+                    &mut app_mix,
                 );
                 while let Ok(more) = pcm_rx.try_recv() {
                     insert_staged_block(
@@ -1364,6 +1855,7 @@ fn run_mixer_loop(
                         &mut game_queue,
                         &mut mic_queue,
                         &mut sec_queue,
+                        &mut app_mix,
                     );
                 }
             }
@@ -1395,14 +1887,23 @@ fn run_mixer_loop(
             let game_ready = !cfg.game_enabled || game_queue.contains_key(&next_mix_idx);
             let mic_ready = !cfg.mic_enabled || mic_queue.contains_key(&next_mix_idx);
             let sec_ready = !cfg.secondary_enabled || sec_queue.contains_key(&next_mix_idx);
-            let all_ready = game_ready && mic_ready && sec_ready;
+            let apps_ready = app_mix.iter().all(|a| {
+                let recently_active = a
+                    .last_block_at
+                    .is_some_and(|t| t.elapsed() < IDLE_SILENCE_THRESHOLD);
+                !a.enabled || !recently_active || a.queue.contains_key(&next_mix_idx)
+            });
+            let all_ready = game_ready && mic_ready && sec_ready && apps_ready;
 
             // Hold up to `MIXER_SLOT_LATE_DEADLINE_US` (120 ms, ~5 blocks) / `MIXER_JITTER_BUFFER_BLOCKS`
             // so a slightly jittery Game stream (e.g. 8ch 7.1 wireless headset) aligns with Mic
             // instead of emitting premature silence; past deadline, substitute silence and advance.
             let any_queue_overflowing = game_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
                 || mic_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
-                || sec_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2;
+                || sec_queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2
+                || app_mix
+                    .iter()
+                    .any(|a| a.queue.len() > MIXER_JITTER_BUFFER_BLOCKS * 2);
             if !all_ready && !past_deadline && !any_queue_overflowing {
                 break;
             }
@@ -1437,8 +1938,20 @@ fn run_mixer_loop(
                 encode_and_emit(enc, &sec_block, pts_us, &sec_telemetry, &out_tx);
             }
 
+            let mut app_blocks: Vec<([f32; STEREO_BLOCK_SAMPLES], f32, bool)> =
+                Vec::with_capacity(app_mix.len());
+            for app in &mut app_mix {
+                let blk = app.queue.remove(&next_mix_idx).unwrap_or(zero_block);
+                if let Some(ref mut enc) = app.encoder {
+                    encode_and_emit(enc, &blk, pts_us, &app.telemetry, &out_tx);
+                }
+                if app.enabled {
+                    app_blocks.push((blk, app.volume, app.muted));
+                }
+            }
+
             let mut mix_inputs: Vec<(&[f32; STEREO_BLOCK_SAMPLES], f32, bool)> =
-                Vec::with_capacity(3);
+                Vec::with_capacity(3 + app_blocks.len());
             if cfg.game_enabled {
                 mix_inputs.push((&game_block, cfg.game_volume, cfg.game_muted));
             }
@@ -1447,6 +1960,9 @@ fn run_mixer_loop(
             }
             if cfg.secondary_enabled {
                 mix_inputs.push((&sec_block, cfg.secondary_volume, cfg.secondary_muted));
+            }
+            for (blk, vol, muted) in &app_blocks {
+                mix_inputs.push((blk, *vol, *muted));
             }
             let mixed_block = mix_stereo_blocks_soft_clip(&mix_inputs);
             encode_and_emit(&mut enc_mixed, &mixed_block, pts_us, &mixed_telemetry, &out_tx);
@@ -1460,6 +1976,7 @@ fn run_mixer_loop(
         &mut enc_game,
         &mut enc_mic,
         &mut enc_sec,
+        &mut app_mix,
         base_pts_us,
         next_mix_idx,
         &mixed_telemetry,
@@ -1477,6 +1994,7 @@ fn flush_all_encoders(
     enc_game: &mut Option<MfAacEncoder>,
     enc_mic: &mut Option<MfAacEncoder>,
     enc_sec: &mut Option<MfAacEncoder>,
+    app_mix: &mut [AppSlotMixerState],
     base_pts_us: i64,
     next_mix_idx: u64,
     mixed_tel: &Arc<TrackTelemetryShared>,
@@ -1494,6 +2012,11 @@ fn flush_all_encoders(
     }
     if let Some(ref mut enc) = enc_sec {
         flush_encoder(enc, base_pts_us, next_mix_idx, sec_tel, out_tx);
+    }
+    for app in app_mix {
+        if let Some(ref mut enc) = app.encoder {
+            flush_encoder(enc, base_pts_us, next_mix_idx, &app.telemetry, out_tx);
+        }
     }
 }
 
@@ -1524,11 +2047,19 @@ fn insert_staged_block(
     game_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
     mic_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
     sec_queue: &mut BTreeMap<u64, [f32; STEREO_BLOCK_SAMPLES]>,
+    app_mix: &mut [AppSlotMixerState],
 ) {
     let map = match blk.slot {
         SourceSlot::Game => game_queue,
         SourceSlot::Mic => mic_queue,
         SourceSlot::Secondary => sec_queue,
+        SourceSlot::App(slot_idx) => {
+            let Some(app) = app_mix.iter_mut().find(|a| a.slot_idx == slot_idx) else {
+                return;
+            };
+            app.last_block_at = Some(Instant::now());
+            &mut app.queue
+        }
     };
     let target_idx = if blk.block_idx < min_idx {
         // Never discard slightly-late blocks (e.g. after 110ms silence pause or 10-40ms USB/7.1 jitter):
@@ -1694,6 +2225,11 @@ fn open_wasapi_stream(role: &SourceRole) -> Result<OpenedWasapiStream, AudioErro
                 AudioOutputMode::DefaultDevice => enumerator
                     .get_default_device_for_role(Direction::Render, Role::Multimedia)
                     .or_else(|_| enumerator.get_default_device(Direction::Render)),
+                AudioOutputMode::GameProcessOnly => {
+                    return Err(AudioError::WasapiInitFailed(
+                        "GameProcessOnly uses ProcessLoopbackStream".to_string(),
+                    ));
+                }
             }
             .map_err(|e| AudioError::DeviceDisconnected {
                 device: format!("Render device unavailable: {e}"),
@@ -2031,9 +2567,11 @@ mod tests {
             let sec_tel = Arc::clone(&sec_tel);
             let stop_flag = Arc::clone(&stop_flag);
             move || {
+                let base_pts = Arc::new(AtomicI64::new(0));
                 run_mixer_loop(
                     settings,
                     startup,
+                    base_pts,
                     clock,
                     pcm_rx,
                     cmd_rx,
@@ -2043,6 +2581,7 @@ mod tests {
                     mic_tel,
                     sec_tel,
                     has_sec,
+                    Vec::new(),
                     stop_flag,
                 );
             }
@@ -2125,9 +2664,11 @@ mod tests {
             let sec_tel = Arc::clone(&sec_tel);
             let stop_flag = Arc::clone(&stop_flag);
             move || {
+                let base_pts = Arc::new(AtomicI64::new(0));
                 run_mixer_loop(
                     settings,
                     startup,
+                    base_pts,
                     clock,
                     pcm_rx,
                     cmd_rx,
@@ -2137,6 +2678,7 @@ mod tests {
                     mic_tel,
                     sec_tel,
                     has_sec,
+                    Vec::new(),
                     stop_flag,
                 );
             }

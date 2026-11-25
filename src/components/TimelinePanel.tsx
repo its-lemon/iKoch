@@ -498,33 +498,40 @@ export function TimelinePanel({
                   : t.timeline.noAudioNotice}
               </div>
             ) : (
-              displayWaveforms.map((wf) => (
-                <div
-                  key={`${wf.stream_ordinal}-${wf.kind}`}
-                  className="rounded-lg bg-white/[0.025] px-2 py-1"
-                >
-                  <div className="mb-0.5 flex items-center justify-between text-[10px] font-medium text-slate-400">
-                    <span>{trackDisplayName(wf.kind, wf.label, lang)}</span>
-                    <span className="font-mono text-[9px] text-slate-500">
-                      Track {wf.stream_ordinal + 1}
-                    </span>
+              displayWaveforms.map((wf) => {
+                const trackMax = wf.peaks.reduce((m, v) => (v > m ? v : m), 0);
+                return (
+                  <div
+                    key={`${wf.stream_ordinal}-${JSON.stringify(wf.kind)}`}
+                    className="rounded-lg bg-white/[0.025] px-2 py-1"
+                  >
+                    <div className="mb-0.5 flex items-center justify-between text-[10px] font-medium text-slate-400">
+                      <span>{trackDisplayName(wf.kind, wf.label, lang)}</span>
+                      <span className="font-mono text-[9px] text-slate-500">
+                        Track {wf.stream_ordinal + 1}
+                      </span>
+                    </div>
+                    <div className="flex h-6 items-center gap-[1.5px] overflow-hidden">
+                      {wf.peaks.map((amp, barIdx) => {
+                        const norm =
+                          trackMax > 0.0005
+                            ? Math.pow(Math.max(0, amp) / trackMax, 0.55)
+                            : 0;
+                        const pctHeight = Math.max(8, Math.min(100, norm * 100));
+                        return (
+                          <div
+                            key={barIdx}
+                            style={{ height: `${pctHeight}%` }}
+                            className={`min-w-[1px] flex-1 rounded-full ${trackBarColor(
+                              wf.kind
+                            )}`}
+                          />
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="flex h-6 items-center gap-[1.5px] overflow-hidden">
-                    {wf.peaks.map((amp, barIdx) => {
-                      const pctHeight = Math.max(10, Math.min(100, amp * 100));
-                      return (
-                        <div
-                          key={barIdx}
-                          style={{ height: `${pctHeight}%` }}
-                          className={`min-w-[1px] flex-1 rounded-full ${trackBarColor(
-                            wf.kind
-                          )}`}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 

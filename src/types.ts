@@ -121,7 +121,24 @@ export interface VideoSettings {
 
 export type AudioOutputMode =
   | { mode: "default_device" }
-  | { mode: "specific_device"; device_id: string };
+  | { mode: "specific_device"; device_id: string }
+  | { mode: "game_process_only" };
+
+export interface ActiveAudioAppInfo {
+  pid: number;
+  exe_name: string;
+  is_active: boolean;
+  peak: number;
+}
+
+export interface AppAudioSlotConfig {
+  id: string;
+  label: string;
+  process_names: string[];
+  volume: number;
+  muted: boolean;
+  enabled: boolean;
+}
 
 export type MicDeviceConfig =
   | { mode: "none" }
@@ -156,6 +173,8 @@ export interface AudioSettings {
   channels: number;
   aac_bitrate_kbps: number;
   separate_tracks: boolean;
+  apply_volumes_to_editor?: boolean;
+  app_audio_slots?: AppAudioSlotConfig[];
 }
 
 export interface UpdateInfo {

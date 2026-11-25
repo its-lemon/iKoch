@@ -187,9 +187,19 @@ impl AppSettings {
         self.video.fps = self.video.fps.clamp(15, 240);
         self.video.bitrate_kbps = self.video.bitrate_kbps.clamp(1_000, 150_000);
         self.video.gop_seconds = 2;
-        self.audio.game_volume = self.audio.game_volume.clamp(0.0, 2.0);
-        self.audio.mic_volume = self.audio.mic_volume.clamp(0.0, 2.0);
-        self.audio.secondary_volume = self.audio.secondary_volume.clamp(0.0, 2.0);
+        self.audio.game_volume = self.audio.game_volume.clamp(0.0, 5.0);
+        self.audio.mic_volume = self.audio.mic_volume.clamp(0.0, 5.0);
+        self.audio.secondary_volume = self.audio.secondary_volume.clamp(0.0, 5.0);
+        for slot in &mut self.audio.app_audio_slots {
+            slot.volume = slot.volume.clamp(0.0, 5.0);
+            slot.label = slot.label.trim().to_string();
+            slot.process_names = slot
+                .process_names
+                .iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
         self.audio.mic_noise_suppression_strength =
             self.audio.mic_noise_suppression_strength.clamp(0.0, 1.0);
         if let Some(gate_db) = self.audio.mic_noise_gate_db.as_mut() {
@@ -242,9 +252,16 @@ impl AppSettings {
     #[must_use]
     pub fn estimated_ring_buffer_bytes(&self) -> usize {
         let video_bps = u64::from(self.video.bitrate_kbps) * 1_000;
+        let enabled_app_slots = self
+            .audio
+            .app_audio_slots
+            .iter()
+            .filter(|s| s.enabled && !s.process_names.is_empty())
+            .count() as u64;
         let has_any_audio = self.audio.game_enabled
             || self.audio.mic_enabled
-            || self.audio.secondary_output_device.is_some();
+            || self.audio.secondary_output_device.is_some()
+            || enabled_app_slots > 0;
         let mixed_kbps = if has_any_audio {
             u64::from(self.audio.aac_bitrate_kbps.min(128))
         } else {
@@ -266,7 +283,8 @@ impl AppSettings {
             } else {
                 0
             };
-            game_kbps + mic_kbps + sec_kbps
+            let app_kbps = enabled_app_slots * u64::from(self.audio.aac_bitrate_kbps.min(128));
+            game_kbps + mic_kbps + sec_kbps + app_kbps
         } else {
             0
         };
@@ -513,6 +531,42 @@ pub enum AudioOutputMode {
     DefaultDevice,
     /// Captures a specific Windows audio render endpoint by device ID.
     SpecificDevice(String),
+    /// Captures only the target game's process tree via WASAPI process loopback.
+    GameProcessOnly,
+}
+
+/// Running Windows application with an active audio session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActiveAudioAppInfo {
+    pub pid: u32,
+    pub exe_name: String,
+    pub is_active: bool,
+    pub peak: f32,
+}
+
+/// User-configured per-application audio capture slot (e.g. Discord, Music).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppAudioSlotConfig {
+    pub id: String,
+    pub label: String,
+    pub process_names: Vec<String>,
+    pub volume: f32,
+    pub muted: bool,
+    pub enabled: bool,
+}
+
+impl Default for AppAudioSlotConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            process_names: Vec::new(),
+            volume: 1.0,
+            muted: false,
+            enabled: true,
+        }
+    }
 }
 
 /// Microphone input selection mode.
@@ -579,8 +633,13 @@ pub struct AudioSettings {
     pub sample_rate_hz: u32,
     pub channels: u16,
     pub aac_bitrate_kbps: u32,
-    /// Records clean stem tracks (`Game`, `Mic`, optional `Secondary`) alongside the default `Mixed` track.
+    /// Records clean stem tracks (`Game`, `Mic`, optional `Secondary` & `App`) alongside the default `Mixed` track.
     pub separate_tracks: bool,
+    /// Applies configured mixer volumes and mute states when opening clips in the Editor.
+    pub apply_volumes_to_editor: bool,
+    /// User-configured per-application audio capture slots (empty by default).
+    #[serde(default)]
+    pub app_audio_slots: Vec<AppAudioSlotConfig>,
 }
 
 impl Default for AudioSettings {
@@ -608,6 +667,8 @@ impl Default for AudioSettings {
             channels: 2,
             aac_bitrate_kbps: 128,
             separate_tracks: true,
+            apply_volumes_to_editor: true,
+            app_audio_slots: Vec::new(),
         }
     }
 }

@@ -34,13 +34,14 @@ pub use packet::{
     ENCODED_PACKET_CHANNEL_CAPACITY, VIDEO_FRAME_CHANNEL_CAPACITY,
 };
 pub use settings::{
-    AppLanguage, AppSettings, AppTheme, AudioDeviceInfo, AudioOutputMode, AudioSettings,
-    CacheCleanupMode, CaptureMode, CaptureSettings, CaptureTarget, CustomThemeColors,
-    EditorCacheSettings, GameDetectionConfig, GpuVendorPreference, HdrMode, HotkeySettings,
-    MicActivationMode, MicDeviceConfig, MonitorInfo, NotificationSettings, NotificationSoundConfig,
-    NotificationSoundEntry, RateControlMode, ReplayBufferSettings, ResolutionPreset, SoundSource,
-    StorageSettings, UiCornerRadius, UiDensity, UiSettings, VideoCodec, VideoSettings, WindowInfo,
-    MAX_REPLAY_DURATION_SECS, MIN_REPLAY_DURATION_SECS, SETTINGS_SCHEMA_VERSION,
+    ActiveAudioAppInfo, AppAudioSlotConfig, AppLanguage, AppSettings, AppTheme, AudioDeviceInfo,
+    AudioOutputMode, AudioSettings, CacheCleanupMode, CaptureMode, CaptureSettings,
+    CaptureTarget, CustomThemeColors, EditorCacheSettings, GameDetectionConfig,
+    GpuVendorPreference, HdrMode, HotkeySettings, MicActivationMode, MicDeviceConfig, MonitorInfo,
+    NotificationSettings, NotificationSoundConfig, NotificationSoundEntry, RateControlMode,
+    ReplayBufferSettings, ResolutionPreset, SoundSource, StorageSettings, UiCornerRadius,
+    UiDensity, UiSettings, VideoCodec, VideoSettings, WindowInfo, MAX_REPLAY_DURATION_SECS,
+    MIN_REPLAY_DURATION_SECS, SETTINGS_SCHEMA_VERSION,
 };
 
 #[cfg(test)]
@@ -267,7 +268,7 @@ mod tests {
         assert!(TrackKind::AudioSecondary.is_audio());
 
         let mut settings = AppSettings::default();
-        settings.audio.game_volume = 3.5;
+        settings.audio.game_volume = 6.5;
         settings.audio.secondary_volume = -1.0;
         settings.audio.mic_noise_suppression_strength = 2.0;
         settings.audio.mic_noise_gate_db = Some(-5.0);
@@ -280,7 +281,7 @@ mod tests {
             volume: -0.3,
         };
         settings.normalize();
-        assert_eq!(settings.audio.game_volume, 2.0);
+        assert_eq!(settings.audio.game_volume, 5.0);
         assert_eq!(settings.audio.secondary_volume, 0.0);
         assert_eq!(settings.audio.mic_noise_suppression_strength, 1.0);
         assert_eq!(settings.audio.mic_noise_gate_db, Some(-10.0));

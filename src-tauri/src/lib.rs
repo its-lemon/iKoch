@@ -77,6 +77,14 @@ pub fn run() {
         })
         .try_init();
 
+    tracing::info!(
+        "Starting iKoch v{} from '{}'",
+        env!("CARGO_PKG_VERSION"),
+        std::env::current_exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".to_string())
+    );
+
     let start_minimized = std::env::args().any(|a| a == "--minimized" || a == "--background");
 
     let builder = tauri::Builder::default()
@@ -92,6 +100,7 @@ pub fn run() {
             commands::list_windows,
             commands::list_audio_output_devices,
             commands::list_audio_input_devices,
+            commands::list_active_audio_apps,
             commands::send_recorder_command,
             commands::set_capture_target,
             commands::save_clip_now,

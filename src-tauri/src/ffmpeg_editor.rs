@@ -438,10 +438,10 @@ pub fn run_fast_trim(req: &TrimRequest) -> Result<PathBuf, String> {
             } else {
                 let mut v = Vec::new();
                 if let Some(g) = find_track_ordinal(&probed.audio_streams, TrackKind::AudioGame) {
-                    v.push((g, req.game_volume.clamp(0.0, 2.0)));
+                    v.push((g, req.game_volume.clamp(0.0, 5.0)));
                 }
                 if let Some(m) = find_track_ordinal(&probed.audio_streams, TrackKind::AudioMic) {
-                    v.push((m, req.mic_volume.clamp(0.0, 2.0)));
+                    v.push((m, req.mic_volume.clamp(0.0, 5.0)));
                 }
                 v
             };
@@ -748,7 +748,7 @@ fn resolve_active_audio_mix(
             continue;
         }
         if let Some(ord) = find_track_ordinal(streams, spec.kind) {
-            out.push((ord, spec.volume.clamp(0.0, 2.0)));
+            out.push((ord, spec.volume.clamp(0.0, 5.0)));
         }
     }
     if out.is_empty() && specs.iter().all(|s| !s.muted) {

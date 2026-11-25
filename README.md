@@ -2,14 +2,14 @@
 
 # iKoch
 
-**Simple and fast game replay recorder & clip editor for Windows**  
-**Простая и лёгкая программа для записи игровых моментов (откатов) и монтажа клипов на Windows**
+**Fast, lightweight open-source Medal.tv & NVIDIA ShadowPlay alternative for Windows 10/11**  
+**Быстрый и лёгкий open-source аналог Medal.tv и NVIDIA ShadowPlay для Windows 10/11**
 
-[![Release](https://img.shields.io/badge/version-v0.2.1-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
+[![Release](https://img.shields.io/badge/version-v0.2.2-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](Cargo.toml)
 
-[English](#-english) • [Русский (внутри / отдельно)](README.ru.md) • [Download Latest Release / Скачать](https://github.com/its-lemon/iKoch/releases/latest)
+[English](#-english) • [Русский (README.ru.md)](README.ru.md) • [Download Latest Release / Скачать](https://github.com/its-lemon/iKoch/releases/latest)
 
 </div>
 
@@ -18,45 +18,43 @@
 <details open>
 <summary><h2>🇬🇧 English</h2></summary>
 
-**iKoch** lets you save your best gaming moments with a single keypress, record full sessions, edit clips right inside the app, and share them to Discord in seconds — without slowing down your PC.
+**iKoch** is a fast, lightweight **open-source alternative to Medal.tv and NVIDIA ShadowPlay** for Windows 10/11, built on **Rust + Tauri v2** — with **no ads, no mandatory accounts, no telemetry, no anti-cheat-risky DLL hooks**, and minimal tray RAM usage (~33–42 MB, with no browser lingering in the background).
 
 <p align="center">
   <img src="docs/screenshots/preview-en.png" alt="iKoch English UI" width="900" />
 </p>
 
-### ✨ What iKoch Can Do
-- **Save the Last Moments (`F9`)** — keeps the last 15 seconds to 5 minutes ready in the background and saves them instantly when something cool happens. You can also turn on **Reset buffer after clip** so the next clip never repeats what you already saved.
-- **Record Full Videos (`F10`)** — record long gameplay sessions or your screen anytime, safely protected against crashes.
-- **Automatic Game Detection** — automatically starts working when you launch a game and pauses when you Alt+Tab out (or lets you pick a specific monitor or window).
-- **Separate Sound for Games, Mic & Apps** — adjust the volume of your game, microphone (with built-in noise removal), and other apps like Discord or Spotify independently. Idle apps use zero resources until you open them.
-- **Easy Built-in Editor** — cut clips in seconds (save as a new file or replace the original), merge multiple clips together, speed up or slow down, adjust volume per track, shrink files to fit Discord (`10 MB` / `50 MB`), and copy clips straight to your clipboard (`Ctrl+V`).
-- **Your Style, Your Language** — switch between English and Russian, pick from 8 themes or customize your own colors, and hover over `(?)` icons anytime for quick tips.
-- **One-Click Updates** — checks for new versions automatically and installs updates right from Settings.
-- **Runs Quietly in the Tray** — closing the window frees up memory while keeping hotkeys and replay saving active in the background.
+### ✨ Features (`v0.2.2`)
+- **Zero-Copy GPU Capture:** `Windows.Graphics.Capture` + `DXGI Desktop Duplication` (no yellow border on Windows 10) with hardware encoding (**NVIDIA NVENC / AMD AMF / Intel QuickSync**).
+- **Instant Replays (`F9`) & Crash-Safe Sessions (`F10`):** GOP-aligned RAM `Replay Buffer` (15s–5m, with optional **Reset buffer after clip**), resilient `fMP4` session recording with automatic `faststart` MP4 remux, and timeline bookmarks (`F8`).
+- **Automatic Game Detection:** Smart Whitelist/Blacklist game detection with auto-pause on Alt+Tab, plus manual target selection (**Game / Window / Monitor**).
+- **Per-Application Audio Separation (like Medal):** `WASAPI Process Loopback` + `IAudioSessionEnumerator` isolates **Game**, **Discord**, **Music/Browser**, and **Microphone** into separate MP4 tracks with **0 MB idle overhead**, **0–500% boost** (synced to the Editor), pure-Rust `nnnoiseless` (**RNNoise**), **Noise Gate**, **Soft Limiter**, and **Push-to-Talk / Push-to-Mute**.
+- **Built-in Clip Editor:** Multi-track audio mixer (`0–500%` + Mute) and per-track waveforms, `F8` markers, single-clip multi-segment trim/cut, **Replace current clip** / **Save as new**, `0.25x–4.0x` playback speed, **Discord compression** (`10 / 50 / Custom MB`), instant clipboard copy (`Ctrl+V`), `GIF` and `PNG` frame export.
+- **Full Customization & Housekeeping:** 8 themes + custom color builder, `RU/EN` UI, `(?)` tooltips, automatic editor cache cleanup, disk quota & age limits, Windows autostart, and automatic updates via GitHub Releases.
 
-### 📁 Where Your Videos Go
-Inside your clips folder (by default `Videos\iKoch\`):
+### 📁 Output Folders
+Inside your clips folder (default `Videos\iKoch\`):
 - **`Clips\<Game or Screen>\`** — instant replay clips (`F9`)
-- **`Edited\`** — clips you trimmed, merged, or compressed for Discord
+- **`Edited\`** — trimmed, speed-adjusted, or Discord-compressed clips
 - **`Sessions\<Game or Screen>\`** — full session recordings (`F10`)
 
 ### ⌨️ Default Shortcuts
-| Shortcut | What it does |
+| Shortcut | Action |
 |---|---|
-| `F9` | Save instant clip |
-| `F10` | Start / stop full recording |
+| `F9` | Save instant replay clip |
+| `F10` | Start / stop full session recording |
 | `F8` | Add a bookmark marker |
 | `Ctrl+Shift+M` | Mute / unmute microphone |
 | `Ctrl+Shift+P` | Privacy Mode (pause capture & clear buffer) |
 
 <details>
-<summary><b>🛠 Technical Details & Build from Source (for developers)</b></summary>
+<summary><b>🛠 Technical Details & Build from Source</b></summary>
 
 - **Stack:** Rust + Tauri v2 + React + TypeScript.
-- **Video Pipeline:** Windows Graphics Capture (WGC) with zero-copy D3D11 -> GPU hardware encoding (NVIDIA NVENC / AMD AMF / Intel QuickSync), GOP-aligned circular RAM replay buffer, crash-safe fMP4 session writer with automatic `faststart` MP4 remux.
-- **Audio Pipeline:** Multi-track WASAPI capture (`Mixed Audio` default playback track + separate `Game`, `Microphone` with pure-Rust `nnnoiseless` RNNoise + noise gate + soft limiter + PTT/PTM, optional `Secondary`, and lazy per-app WASAPI Process Loopback stems `AudioApp(u8)` using `IAudioSessionManager2`).
-- **Editor & Sidecar:** FFmpeg/FFprobe sidecars (`-c copy` lossless trim, multi-segment merge, `amix` dynamic track mixer, Discord bitrate budgeting), Win32 `CF_HDROP` clipboard copy, GitHub Releases updater.
-- **App Data:** `.json` sidecars, `.jpg` thumbnails, `.tmp` stems, and logs are stored out-of-band in `%LOCALAPPDATA%\iKoch\`.
+- **Video Pipeline:** Zero-copy D3D11 WGC / DXGI Desktop Duplication -> GPU hardware encoding (`H.264` / `HEVC`), GOP-aligned circular RAM replay buffer, crash-safe `fMP4` session writer with `faststart` MP4 remux.
+- **Audio Pipeline:** Multi-track `48 kHz` Stereo AAC (`AudioMixed` with soft-clipping + separate `AudioGame`, `AudioMic` with `nnnoiseless` RNNoise + noise gate + soft limiter + PTT/PTM, optional `AudioSecondary`, and dynamic `AudioApp(u8)` via `ActivateAudioInterfaceAsync` Process Loopback & `IAudioSessionManager2`).
+- **Editor & Sidecar:** FFmpeg/FFprobe sidecars (`-c copy` lossless trim, single-clip multi-segment cut, `amix` multi-track mixer, Discord bitrate budgeting), Win32 `CF_HDROP` clipboard copy, GitHub Releases updater.
+- **App Data:** `.json` sidecars, `.jpg` thumbnails, `.m4a` stems, and logs are stored out-of-band in `%LOCALAPPDATA%\iKoch\`.
 
 **Build from source:**
 1. Install **Rust (1.82+)** and **Node.js (20+)**.
@@ -76,26 +74,24 @@ Inside your clips folder (by default `Videos\iKoch\`):
 <details>
 <summary><h2>🇷🇺 Русский</h2></summary>
 
-**iKoch** помогает сохранять лучшие игровые моменты одним нажатием клавиши, записывать длинные видео, быстро обрезать или склеивать клипы прямо внутри программы и отправлять их в Discord — без тормозов и лишней нагрузки на ПК.
+**iKoch** — это быстрый и лёгкий **open-source аналог Medal.tv и NVIDIA ShadowPlay для Windows 10/11** на **Rust + Tauri v2**: **без рекламы, без обязательных аккаунтов, без телеметрии, без античит-рисковых DLL-хуков** и с минимальным потреблением ОЗУ в трее (~33–42 МБ, без висящего в фоне браузера).
 
 <p align="center">
   <img src="docs/screenshots/preview-ru.png" alt="iKoch Русский интерфейс" width="900" />
 </p>
 
-### ✨ Что умеет iKoch
-- **Сохранение последних моментов (`F9`)** — программа держит в памяти последние 15 секунд – 5 минут игры и сохраняет клип по нажатию кнопки. Можно включить **очистку буфера после клипа**, чтобы в следующем клипе не повторялись уже сохранённые секунды.
-- **Обычная запись видео (`F10`)** — записывайте долгие игровые сессии или экран целиком, запись не потеряется даже при сбое.
-- **Умное определение игр** — сама находит запущенную игру, ставит запись на паузу при сворачивании (Alt+Tab) или позволяет выбрать конкретный монитор/окно.
-- **Раздельный звук для игры, микрофона и программ** — меняйте громкость игры, голоса (с подавлением шума клавиатуры и кулеров) и отдельных приложений вроде Discord или Spotify независимо друг от друга. Пока программа не запущена, она не тратит ресурсы.
-- **Удобный встроенный редактор** — быстрая обрезка (можно сохранить новым файлом или заменить оригинал), склейка нескольких клипов в один, изменение скорости, микшер громкости каждой дорожки, сжатие под лимит Discord (`10 МБ` / `50 МБ`), копирование готового видео в буфер обмена (`Ctrl+V`).
-- **Свой стиль и подсказки** — русский и английский язык, 8 тем + настройка любых цветов под себя и понятные подсказки `(?)` рядом с каждой настройкой.
-- **Обновления в один клик** — сама проверяет новые версии на GitHub и позволяет обновиться прямо из Настроек.
-- **Лёгкий фоновый режим** — когда вы закрываете окно, интерфейс полностью выгружается из памяти, а запись по горячим клавишам продолжает работать в трее.
+### ✨ Возможности (`v0.2.2`)
+- **Zero-Copy GPU захват:** `Windows.Graphics.Capture` + `DXGI Desktop Duplication` (без жёлтой рамки на Windows 10) с аппаратным кодированием (**NVIDIA NVENC / AMD AMF / Intel QuickSync**).
+- **Мгновенные откаты (`F9`) и запись сессий (`F10`):** кольцевой `Replay Buffer` в ОЗУ (15с–5м, с опцией **сброса буфера после клипа**), отказоустойчивая запись сессий в `fMP4` с ремуксом в `faststart` MP4 и закладки (`F8`).
+- **Авто-детект игр:** умный Whitelist/Blacklist игр с авто-паузой при сворачивании (Alt+Tab) или ручной выбор цели (**Игра / Окно / Монитор**).
+- **Разделение звука по приложениям как в Medal:** `WASAPI Process Loopback` + `IAudioSessionEnumerator` пишет **Игру**, **Discord**, **Музыку/браузер** и **Микрофон** на отдельные дорожки MP4 с **0 МБ** оверхеда в простое, усилением **0–500%** и синхронизацией с Редактором, шумодавом `nnnoiseless` (**RNNoise**), **Noise Gate**, **Soft Limiter** и **Push-to-Talk / Push-to-Mute**.
+- **Встроенный видеоредактор:** многодорожечный микшер (`0–500%` + Mute) и волны по каждой дорожке, закладки `F8`, нарезка сегментов одного клипа, **«Заменить текущий клип» / «Сохранить как новый»**, скорость `0.25x–4.0x`, сжатие под Discord (`10 / 50 / Custom МБ`), копирование файла в буфер (`Ctrl+V`), экспорт в `GIF` и `PNG`.
+- **Полная кастомизация:** 8 тем + конструктор своей темы, `RU/EN` языки, подсказки `(?)`, авто-очистка кэша, квота диска, автозапуск и автообновление через GitHub Releases.
 
 ### 📁 Где лежат ваши видео
 Внутри выбранной папки (по умолчанию `Видео\iKoch\`):
-- **`Clips\<Игра или Screen>\`** — мгновенные клипы (`F9`)
-- **`Edited\`** — клипы после обрезки, склейки или сжатия под Discord
+- **`Clips\<Игра или Screen>\`** — мгновенные откаты (`F9`)
+- **`Edited\`** — клипы после обрезки, ускорения или сжатия под Discord
 - **`Sessions\<Игра или Screen>\`** — полные записи сессий (`F10`)
 
 ### ⌨️ Горячие клавиши по умолчанию
@@ -105,16 +101,16 @@ Inside your clips folder (by default `Videos\iKoch\`):
 | `F10` | Начать / остановить полную запись |
 | `F8` | Поставить закладку на таймлайне |
 | `Ctrl+Shift+M` | Включить / выключить микрофон |
-| `Ctrl+Shift+P` | Режим приватности (пауза записи и очистка памяти) |
+| `Ctrl+Shift+P` | Режим приватности (пауза записи и очистка буфера) |
 
 <details>
-<summary><b>🛠 Технические детали и сборка из исходников (для разработчиков)</b></summary>
+<summary><b>🛠 Технические детали и сборка из исходников</b></summary>
 
 - **Стек:** Rust + Tauri v2 + React + TypeScript.
-- **Захват и видео:** Windows Graphics Capture (WGC) с zero-copy D3D11 -> аппаратное кодирование GPU (NVIDIA NVENC / AMD AMF / Intel QuickSync), кольцевой GOP-буфер в ОЗУ с сохранением по ключевым кадрам (IDR), отказоустойчивая запись `.fmp4` с автоматическим ремуксом в `faststart` MP4.
-- **Аудио-ядро:** многодорожечный WASAPI (`Mixed Audio` по умолчанию + отдельные стемы `Game`, `Microphone` с `nnnoiseless` RNNoise + noise gate + soft limiter + PTT/PTM, опциональный `Secondary` и ленивый WASAPI Process Loopback `AudioApp(u8)` через `IAudioSessionManager2`).
-- **Редактор и интеграции:** FFmpeg/FFprobe sidecar (lossless-обрезка `-c copy`, склейка сегментов, динамический `amix` микшер, расчёт битрейта под Discord), копирование файла в буфер Windows через `CF_HDROP`, автообновление через GitHub Releases API.
-- **Служебные файлы:** `.json`-сайдкар метаданных, `.jpg`-превью, временные `.tmp`-стемы и логи хранятся отдельно в `%LOCALAPPDATA%\iKoch\`.
+- **Захват и видео:** Zero-copy D3D11 WGC / DXGI Desktop Duplication -> аппаратное кодирование GPU (`H.264` / `HEVC`), кольцевой GOP-буфер в ОЗУ, отказоустойчивая запись `.fmp4` с автоматическим ремуксом в `faststart` MP4.
+- **Аудио-ядро:** многодорожечный `48 kHz` Stereo AAC (`AudioMixed` с мягким клиппером + отдельные стемы `AudioGame`, `AudioMic` с `nnnoiseless` RNNoise + noise gate + soft limiter + PTT/PTM, опциональный `AudioSecondary` и динамический `AudioApp(u8)` через `ActivateAudioInterfaceAsync` Process Loopback и `IAudioSessionManager2`).
+- **Редактор и интеграции:** FFmpeg/FFprobe sidecar (lossless-обрезка `-c copy`, нарезка сегментов одного клипа, `amix` микшер, расчёт битрейта под Discord), копирование файла в буфер Windows через `CF_HDROP`, обновление через GitHub Releases API.
+- **Служебные файлы:** `.json`-сайдкар метаданных, `.jpg`-превью, `.m4a`-стемы и логи хранятся отдельно в `%LOCALAPPDATA%\iKoch\`.
 
 **Сборка из исходников:**
 1. Установите **Rust (1.82+)** и **Node.js (20+)**.
