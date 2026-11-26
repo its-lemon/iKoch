@@ -112,6 +112,7 @@ impl GopRingBuffer {
     pub fn reset_for_new_source(&mut self) {
         self.headers = None;
         self.gops.clear();
+        self.gops.shrink_to_fit();
         self.total_bytes = 0;
         self.latest_pts_us = None;
     }
@@ -120,6 +121,7 @@ impl GopRingBuffer {
     /// so the replay window restarts cleanly at `0s` on the next IDR keyframe.
     pub fn clear_keep_headers(&mut self) {
         self.gops.clear();
+        self.gops.shrink_to_fit();
         self.total_bytes = 0;
         self.latest_pts_us = None;
     }

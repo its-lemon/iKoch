@@ -26,7 +26,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::{DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET};
 
-const OUTPUT_POOL_SIZE: usize = 8;
+const OUTPUT_POOL_SIZE: usize = 4;
 
 /// VRAM-resident NV12 frame passed zero-copy from `core-capture` to `core-encode`.
 #[derive(Clone)]

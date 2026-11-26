@@ -10,13 +10,15 @@ use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::time::{Duration, Instant};
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
+use windows::Win32::System::Threading::{
+    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowTextW,
@@ -310,7 +312,6 @@ pub fn resolve_human_game_name(
 /// Stateful foreground game watcher supporting grace-period pause on Alt+Tab.
 pub struct GameDetector {
     config: GameDetectionConfig,
-    sys: Option<System>,
     active_game: Option<DetectedGameInfo>,
     lost_since: Option<Instant>,
 }
@@ -321,7 +322,6 @@ impl GameDetector {
     pub fn new(config: GameDetectionConfig) -> Self {
         Self {
             config,
-            sys: System::new().ok(),
             active_game: None,
             lost_since: None,
         }
@@ -360,15 +360,7 @@ impl GameDetector {
             return GameDetectionTransition::NoChange;
         };
 
-        let target_pid = Pid::from_u32(current.process_id);
-        let sys_alive = self.sys.as_mut().is_none_or(|sys| {
-            sys.refresh_processes_specifics(
-                ProcessesToUpdate::Some(&[target_pid]),
-                true,
-                ProcessRefreshKind::nothing(),
-            );
-            sys.process(target_pid).is_some()
-        });
+        let sys_alive = is_pid_still_active(current.process_id);
         let process_alive = sys_alive
             && unsafe { IsWindow(Some(HWND(current.hwnd as *mut _))) }.as_bool();
 
@@ -387,6 +379,21 @@ impl GameDetector {
         }
 
         GameDetectionTransition::NoChange
+    }
+}
+
+fn is_pid_still_active(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    unsafe {
+        let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return false;
+        };
+        let mut exit_code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut exit_code).is_ok();
+        let _ = CloseHandle(handle);
+        ok && exit_code == 259
     }
 }
 

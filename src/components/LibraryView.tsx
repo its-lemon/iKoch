@@ -134,6 +134,8 @@ export function LibraryView({
   };
 
   const [hoveredCardPath, setHoveredCardPath] = useState<string | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+  const hoverVideoRef = useRef<HTMLVideoElement | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -150,6 +152,26 @@ export function LibraryView({
     Record<string, string>
   >({});
   const attemptedThumbsRef = useRef<Set<string>>(new Set());
+  const thumbQueueRunningRef = useRef(false);
+
+  const releaseHoverVideo = () => {
+    const vid = hoverVideoRef.current;
+    if (vid) {
+      vid.pause();
+      vid.removeAttribute("src");
+      vid.load();
+      hoverVideoRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current !== null) {
+        window.clearTimeout(hoverTimerRef.current);
+      }
+      releaseHoverVideo();
+    };
+  }, []);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -167,40 +189,43 @@ export function LibraryView({
     };
   }, [contextMenu]);
 
-  // Automatically generate missing thumbnails sequentially in the background.
+  // Automatically generate missing thumbnails strictly 1 clip at a time in a single queue.
   useEffect(() => {
+    if (thumbQueueRunningRef.current) return;
     let cancelled = false;
     const missing = clips.filter(
-      (c) =>
-        !c.thumbnail_path &&
-        !generatedThumbs[c.file_path] &&
-        !attemptedThumbsRef.current.has(c.file_path)
+      (c) => !c.thumbnail_path && !attemptedThumbsRef.current.has(c.file_path)
     );
     if (missing.length === 0) return;
 
+    thumbQueueRunningRef.current = true;
     (async () => {
-      for (const item of missing.slice(0, 6)) {
-        if (cancelled) break;
-        attemptedThumbsRef.current.add(item.file_path);
-        try {
-          const prep = await api.prepareEditorMedia(item.file_path, 48);
+      try {
+        for (const item of missing.slice(0, 6)) {
           if (cancelled) break;
-          if (prep.thumbnail_path) {
-            setGeneratedThumbs((prev) => ({
-              ...prev,
-              [item.file_path]: prep.thumbnail_path,
-            }));
+          attemptedThumbsRef.current.add(item.file_path);
+          try {
+            const prep = await api.prepareEditorMedia(item.file_path, 48);
+            if (cancelled) break;
+            if (prep.thumbnail_path) {
+              setGeneratedThumbs((prev) => ({
+                ...prev,
+                [item.file_path]: prep.thumbnail_path,
+              }));
+            }
+          } catch {
+            // Unreadable files are skipped gracefully.
           }
-        } catch {
-          // Video fallback handles unreadable files gracefully.
         }
+      } finally {
+        thumbQueueRunningRef.current = false;
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [clips, generatedThumbs]);
+  }, [clips]);
 
   const uniqueGames = useMemo(() => {
     const set = new Set<string>();
@@ -504,8 +529,22 @@ export function LibraryView({
               return (
                 <div
                   key={clip.id || clip.file_path}
-                  onMouseEnter={() => setHoveredCardPath(clip.file_path)}
+                  onMouseEnter={() => {
+                    if (hoverTimerRef.current !== null) {
+                      window.clearTimeout(hoverTimerRef.current);
+                    }
+                    const path = clip.file_path;
+                    hoverTimerRef.current = window.setTimeout(() => {
+                      hoverTimerRef.current = null;
+                      setHoveredCardPath(path);
+                    }, 150);
+                  }}
                   onMouseLeave={() => {
+                    if (hoverTimerRef.current !== null) {
+                      window.clearTimeout(hoverTimerRef.current);
+                      hoverTimerRef.current = null;
+                    }
+                    releaseHoverVideo();
                     setHoveredCardPath((prev) =>
                       prev === clip.file_path ? null : prev
                     );
@@ -540,21 +579,21 @@ export function LibraryView({
                         className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
                       />
                     ) : (
-                      <video
-                        src={toAssetUrl(clip.file_path)}
-                        preload="metadata"
-                        muted
-                        className="h-full w-full object-cover"
-                      />
+                      <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 via-slate-950 to-black">
+                        <Film className="h-8 w-8 text-slate-600" />
+                      </div>
                     )}
 
                     {isHovered && (
                       <video
+                        ref={hoverVideoRef}
+                        key={clip.file_path}
                         src={toAssetUrl(clip.file_path)}
                         autoPlay
                         muted
                         loop
                         playsInline
+                        preload="auto"
                         className="absolute inset-0 h-full w-full object-cover"
                       />
                     )}

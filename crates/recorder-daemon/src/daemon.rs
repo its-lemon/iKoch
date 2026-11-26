@@ -531,6 +531,7 @@ impl DaemonRuntime {
                 if let Some(cap) = self.video_capture.take() {
                     cap.stop();
                 }
+                self.stop_audio_bridge();
                 self.router.on_source_reset();
                 self.router_has_headers = false;
             }
@@ -594,6 +595,7 @@ impl DaemonRuntime {
             if let Some(cap) = self.video_capture.take() {
                 cap.stop();
             }
+            self.stop_audio_bridge();
             self.router.on_source_reset();
             self.router_has_headers = false;
             self.recent_replay_markers.clear();
@@ -1170,7 +1172,7 @@ impl DaemonRuntime {
         self.reconcile_capture_state();
     }
 
-    fn restart_audio_bridge(&mut self) {
+    fn stop_audio_bridge(&mut self) {
         self.audio_bridge_stop.store(true, Ordering::SeqCst);
         if let Some(aud) = self.audio.take() {
             aud.stop();
@@ -1184,6 +1186,10 @@ impl DaemonRuntime {
         self.audio_sec_present = false;
         self.audio_app_tracks_present.clear();
         self.router.clear_audio_headers();
+    }
+
+    fn restart_audio_bridge(&mut self) {
+        self.stop_audio_bridge();
         if self.video_capture.is_some() {
             self.sync_audio_bridge();
         }

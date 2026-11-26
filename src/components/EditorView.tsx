@@ -258,7 +258,8 @@ export function EditorView({
   const cleanupStemAudio = useCallback(() => {
     for (const node of stemNodesRef.current.values()) {
       node.audio.pause();
-      node.audio.src = "";
+      node.audio.removeAttribute("src");
+      node.audio.load();
       try {
         node.source.disconnect();
         node.gain.disconnect();
@@ -272,6 +273,15 @@ export function EditorView({
       audioCtxRef.current = null;
     }
     setStemsReady(false);
+  }, []);
+
+  const releaseVideoDecoder = useCallback(() => {
+    const vid = videoRef.current;
+    if (vid) {
+      vid.pause();
+      vid.removeAttribute("src");
+      vid.load();
+    }
   }, []);
 
   // Load clip metadata & prepare FFmpeg stems + waveforms when clip switches.
@@ -403,8 +413,9 @@ export function EditorView({
     return () => {
       cancelled = true;
       cleanupStemAudio();
+      releaseVideoDecoder();
     };
-  }, [cleanupStemAudio, clip?.file_path, mediaReloadNonce]);
+  }, [cleanupStemAudio, releaseVideoDecoder, clip?.file_path, mediaReloadNonce]);
 
   // Apply live track volume (0..500%) & mute + masterVolume directly to Web Audio GainNodes.
   useEffect(() => {

@@ -18,7 +18,7 @@
 <details open>
 <summary><h2>🇬🇧 English</h2></summary>
 
-**iKoch** is a fast, lightweight **open-source alternative to Medal.tv and NVIDIA ShadowPlay** for Windows 10/11, built on **Rust + Tauri v2** — with **no ads, no mandatory accounts, no telemetry, no anti-cheat-risky DLL hooks**, and minimal tray RAM usage (~33–42 MB, with no browser lingering in the background).
+**iKoch** is a fast, lightweight **open-source alternative to Medal.tv and NVIDIA ShadowPlay** for Windows 10/11, built on **Rust + Tauri v2** — with **no ads, no mandatory accounts, no telemetry, no anti-cheat-risky DLL hooks**, and low RAM usage (~100–130 MB during active 30s GPU buffering with **0 MB** for the UI when closed to tray, vs 350–500+ MB in Electron clippers).
 
 <p align="center">
   <img src="docs/screenshots/preview-en.png" alt="iKoch English UI" width="900" />
@@ -89,7 +89,7 @@ Inside your clips folder (default `Videos\iKoch\`):
 <details>
 <summary><h2>🇷🇺 Русский</h2></summary>
 
-**iKoch** — это быстрый и лёгкий **open-source аналог Medal.tv и NVIDIA ShadowPlay для Windows 10/11** на **Rust + Tauri v2**: **без рекламы, без обязательных аккаунтов, без телеметрии, без античит-рисковых DLL-хуков** и с минимальным потреблением ОЗУ в трее (~33–42 МБ, без висящего в фоне браузера).
+**iKoch** — это быстрый и лёгкий **open-source аналог Medal.tv и NVIDIA ShadowPlay для Windows 10/11** на **Rust + Tauri v2**: **без рекламы, без обязательных аккаунтов, без телеметрии, без античит-рисковых DLL-хуков** и с низким расходом ОЗУ (~100–130 МБ при активной 30с буферизации с GPU-драйверами и **0 МБ** на интерфейс в трее против 350–500+ МБ у Electron-клипперов).
 
 <p align="center">
   <img src="docs/screenshots/preview-ru.png" alt="iKoch Русский интерфейс" width="900" />

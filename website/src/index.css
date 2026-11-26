@@ -1,0 +1,269 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+[data-theme="ikoch_dark"] {
+  --bg-app: #080a0f;
+  --bg-sidebar: #0b0d14;
+  --bg-panel: #0d1018;
+  --bg-card: #131826;
+  --bg-elevated: #181f30;
+  --border-subtle: rgba(148, 163, 184, 0.14);
+  --accent: #4f6ef7;
+  --accent-hover: #6d89ff;
+  --accent-rgb: 79 110 247;
+  --accent-soft: rgba(79, 110, 247, 0.16);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+}
+
+[data-theme="oled_midnight"] {
+  --bg-app: #020305;
+  --bg-sidebar: #06080b;
+  --bg-panel: #080a0e;
+  --bg-card: #0f131a;
+  --bg-elevated: #151b26;
+  --border-subtle: rgba(148, 163, 184, 0.16);
+  --accent: #06b6d4;
+  --accent-hover: #22d3ee;
+  --accent-rgb: 6 182 212;
+  --accent-soft: rgba(6, 182, 212, 0.16);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+}
+
+[data-theme="crimson_pro"] {
+  --bg-app: #0b080b;
+  --bg-sidebar: #0f0b0f;
+  --bg-panel: #120d12;
+  --bg-card: #1a131a;
+  --bg-elevated: #231923;
+  --border-subtle: rgba(244, 63, 94, 0.16);
+  --accent: #e11d48;
+  --accent-hover: #f43f5e;
+  --accent-rgb: 225 29 72;
+  --accent-soft: rgba(225, 29, 72, 0.17);
+  --text-primary: #f8f4f6;
+  --text-secondary: #b69fa8;
+}
+
+[data-theme="nordic_slate"] {
+  --bg-app: #070d0a;
+  --bg-sidebar: #0a120e;
+  --bg-panel: #0d1612;
+  --bg-card: #13201a;
+  --bg-elevated: #192b23;
+  --border-subtle: rgba(16, 185, 129, 0.16);
+  --accent: #10b981;
+  --accent-hover: #34d399;
+  --accent-rgb: 16 185 129;
+  --accent-soft: rgba(16, 185, 129, 0.16);
+  --text-primary: #ecfdf5;
+  --text-secondary: #8fb8a8;
+}
+
+[data-theme="amethyst_neon"] {
+  --bg-app: #090711;
+  --bg-sidebar: #0d0a18;
+  --bg-panel: #100d1d;
+  --bg-card: #18132b;
+  --bg-elevated: #211a3b;
+  --border-subtle: rgba(168, 85, 247, 0.18);
+  --accent: #a855f7;
+  --accent-hover: #c084fc;
+  --accent-rgb: 168 85 247;
+  --accent-soft: rgba(168, 85, 247, 0.17);
+  --text-primary: #f5f3ff;
+  --text-secondary: #a89ec9;
+}
+
+[data-theme="sunset_amber"] {
+  --bg-app: #0c0907;
+  --bg-sidebar: #100c09;
+  --bg-panel: #14100c;
+  --bg-card: #1d1712;
+  --bg-elevated: #271f17;
+  --border-subtle: rgba(245, 158, 11, 0.16);
+  --accent: #f59e0b;
+  --accent-hover: #fbbf24;
+  --accent-rgb: 245 158 11;
+  --accent-soft: rgba(245, 158, 11, 0.17);
+  --text-primary: #fef3c7;
+  --text-secondary: #b8a386;
+}
+
+[data-theme="emerald_matrix"] {
+  --bg-app: #0b0e14;
+  --bg-sidebar: #0f131b;
+  --bg-panel: #121720;
+  --bg-card: #19202c;
+  --bg-elevated: #222b3a;
+  --border-subtle: rgba(148, 163, 184, 0.18);
+  --accent: #64748b;
+  --accent-hover: #94a3b8;
+  --accent-rgb: 100 116 139;
+  --accent-soft: rgba(100, 116, 139, 0.2);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+}
+
+[data-theme="frost_slate"] {
+  --bg-app: #080e17;
+  --bg-sidebar: #0b121e;
+  --bg-panel: #0e1624;
+  --bg-card: #152134;
+  --bg-elevated: #1c2c44;
+  --border-subtle: rgba(56, 189, 248, 0.16);
+  --accent: #38bdf8;
+  --accent-hover: #7dd3fc;
+  --accent-rgb: 56 189 248;
+  --accent-soft: rgba(56, 189, 248, 0.16);
+  --text-primary: #f0f9ff;
+  --text-secondary: #93b4cc;
+}
+
+:root[data-radius="sharp"] {
+  --ui-radius-card: 0.375rem;
+  --ui-radius-btn: 0.25rem;
+}
+:root[data-radius="medium"],
+:root:not([data-radius]) {
+  --ui-radius-card: 1rem;
+  --ui-radius-btn: 0.75rem;
+}
+:root[data-radius="soft"] {
+  --ui-radius-card: 1.35rem;
+  --ui-radius-btn: 1rem;
+}
+
+:root[data-radius="sharp"] .rounded-2xl {
+  border-radius: var(--ui-radius-card);
+}
+:root[data-radius="sharp"] .rounded-xl {
+  border-radius: var(--ui-radius-btn);
+}
+:root[data-radius="soft"] .rounded-2xl {
+  border-radius: var(--ui-radius-card);
+}
+:root[data-radius="soft"] .rounded-xl {
+  border-radius: var(--ui-radius-btn);
+}
+
+:root[data-density="compact"] .p-6 {
+  padding: 1rem;
+}
+:root[data-density="compact"] .gap-5 {
+  gap: 0.85rem;
+}
+
+:root[data-glass="true"] aside,
+:root[data-glass="true"] header,
+:root[data-glass="true"] section {
+  backdrop-filter: blur(14px);
+}
+
+@layer base {
+  html:not(.toast-page),
+  html:not(.toast-page) body,
+  #root {
+    min-height: 100%;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+  }
+
+  html.toast-page,
+  html.toast-page body {
+    height: 100%;
+    background-color: transparent;
+    color: var(--text-primary);
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.24);
+  }
+}
+
+@keyframes toast-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-progress {
+  0% {
+    width: 100%;
+  }
+  100% {
+    width: 0%;
+  }
+}
+
+.animate-toast-enter {
+  animation: toast-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-toast-progress {
+  animation: toast-progress 2.6s linear forwards;
+}
+
+/* Custom sleek range slider with accent track fill */
+input[type="range"].ikoch-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"].ikoch-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #ffffff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 3px rgb(var(--accent-rgb) / 0.24),
+    0 2px 6px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+input[type="range"].ikoch-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 4px rgb(var(--accent-rgb) / 0.36),
+    0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+input[type="range"].ikoch-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+[data-theme="custom"] h1,
+[data-theme="custom"] h2,
+[data-theme="custom"] h3,
+[data-theme="custom"] .text-slate-100,
+[data-theme="custom"] .text-slate-200 {
+  color: var(--text-primary);
+}
