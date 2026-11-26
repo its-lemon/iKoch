@@ -29,6 +29,8 @@ import {
   formatDate,
   formatDateCompact,
   formatDuration,
+  localizeClipTitle,
+  localizeGameName,
 } from "../utils/format";
 import { CustomSelect } from "./CustomSelect";
 
@@ -335,7 +337,7 @@ export function LibraryView({
 
   const gameOptions = [
     { value: "all", label: t.library.allGames },
-    ...uniqueGames.map((g) => ({ value: g, label: g })),
+    ...uniqueGames.map((g) => ({ value: g, label: localizeGameName(g, lang) })),
   ];
 
   const sortOptions: { value: SortOrder; label: string }[] = [
@@ -734,9 +736,9 @@ export function LibraryView({
                         <h3
                           onClick={() => onOpenEditor(clip)}
                           className="cursor-pointer truncate text-sm font-semibold text-[var(--text-primary)] transition hover:text-[var(--accent-hover)]"
-                          title={clip.title}
+                          title={localizeClipTitle(clip.title, lang)}
                         >
-                          {clip.title}
+                          {localizeClipTitle(clip.title, lang)}
                         </h3>
                       )}
 
@@ -744,7 +746,7 @@ export function LibraryView({
                         <div className="mt-1 space-y-0.5 text-[11px] text-[var(--text-secondary,rgb(148,163,184))]">
                           <div className="flex items-center justify-between gap-2">
                             <span className="min-w-0 truncate font-medium text-[var(--accent-hover)]">
-                              {clip.game_name || t.library.defaultScreen}
+                              {localizeGameName(clip.game_name, lang)}
                             </span>
                             <span className="shrink-0 font-mono text-[10px] opacity-80">
                               {formatBytesCompact(clip.file_size_bytes, lang)}
@@ -757,7 +759,7 @@ export function LibraryView({
                       ) : (
                         <div className="mt-1 flex items-center gap-1.5 truncate text-[11px] text-[var(--text-secondary,rgb(148,163,184))]">
                           <span className="truncate font-medium text-[var(--accent-hover)]">
-                            {clip.game_name || t.library.defaultScreen}
+                            {localizeGameName(clip.game_name, lang)}
                           </span>
                           <span className="shrink-0">•</span>
                           <span className="shrink-0">

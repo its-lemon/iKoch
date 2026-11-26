@@ -5,7 +5,7 @@
 **Fast, lightweight open-source Medal.tv & NVIDIA ShadowPlay alternative for Windows 10/11**  
 **Быстрый и лёгкий open-source аналог Medal.tv и NVIDIA ShadowPlay для Windows 10/11**
 
-[![Release](https://img.shields.io/badge/version-v0.2.2-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
+[![Release](https://img.shields.io/badge/version-v0.2.3-4f6ef7?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D6?style=flat-square)](https://github.com/its-lemon/iKoch/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](Cargo.toml)
 
@@ -24,7 +24,7 @@
   <img src="docs/screenshots/preview-en.png" alt="iKoch English UI" width="900" />
 </p>
 
-### ✨ Features (`v0.2.2`)
+### ✨ Features (`v0.2.3`)
 - **Zero-Copy GPU Capture:** `Windows.Graphics.Capture` + `DXGI Desktop Duplication` (no yellow border on Windows 10) with hardware encoding (**NVIDIA NVENC / AMD AMF / Intel QuickSync**).
 - **Instant Replays (`F9`) & Crash-Safe Sessions (`F10`):** GOP-aligned RAM `Replay Buffer` (15s–5m, with optional **Reset buffer after clip**), resilient `fMP4` session recording with automatic `faststart` MP4 remux, and timeline bookmarks (`F8`).
 - **Automatic Game Detection:** Smart Whitelist/Blacklist game detection with auto-pause on Alt+Tab, plus manual target selection (**Game / Window / Monitor**).
@@ -95,7 +95,7 @@ Inside your clips folder (default `Videos\iKoch\`):
   <img src="docs/screenshots/preview-ru.png" alt="iKoch Русский интерфейс" width="900" />
 </p>
 
-### ✨ Возможности (`v0.2.2`)
+### ✨ Возможности (`v0.2.3`)
 - **Zero-Copy GPU захват:** `Windows.Graphics.Capture` + `DXGI Desktop Duplication` (без жёлтой рамки на Windows 10) с аппаратным кодированием (**NVIDIA NVENC / AMD AMF / Intel QuickSync**).
 - **Мгновенные откаты (`F9`) и запись сессий (`F10`):** кольцевой `Replay Buffer` в ОЗУ (15с–5м, с опцией **сброса буфера после клипа**), отказоустойчивая запись сессий в `fMP4` с ремуксом в `faststart` MP4 и закладки (`F8`).
 - **Авто-детект игр:** умный Whitelist/Blacklist игр с авто-паузой при сворачивании (Alt+Tab) или ручной выбор цели (**Игра / Окно / Монитор**).

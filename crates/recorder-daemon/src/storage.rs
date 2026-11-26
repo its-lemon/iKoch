@@ -507,12 +507,11 @@ fn normalize_legacy_metadata_labels(meta: &mut ClipMetadata) -> bool {
     let mut changed = false;
 
     let gn_lower = meta.game_name.trim().to_ascii_lowercase();
-    let is_screen_game = gn_lower == "screen"
-        || gn_lower == "desktop"
+    let is_legacy_screen = gn_lower == "desktop"
         || gn_lower.starts_with("monitor")
         || gn_lower.starts_with("display");
-    if is_screen_game && meta.game_name != "Экран" {
-        meta.game_name = "Экран".to_string();
+    if is_legacy_screen {
+        meta.game_name = "Screen".to_string();
         changed = true;
     }
 
@@ -534,18 +533,18 @@ fn normalize_legacy_metadata_labels(meta: &mut ClipMetadata) -> bool {
             mon_digits.as_str()
         };
         let suffix = if t_lower.contains("edited") || t_lower.contains("монтаж") {
-            " • Монтаж"
+            " • Edited"
         } else if t_lower.contains("sub-clip") {
             " • Sub-clip"
         } else if t_lower.contains("session") || meta.kind == core_types::RecordingKind::Session {
-            " • Сессия"
+            " • Session"
         } else {
             ""
         };
         let new_title = if t_lower.starts_with("monitor") {
-            format!("Экран (Монитор {mon_num}){suffix}")
+            format!("Screen (Monitor {mon_num}){suffix}")
         } else {
-            format!("Экран{suffix}")
+            format!("Screen{suffix}")
         };
         if meta.title != new_title {
             meta.title = new_title;

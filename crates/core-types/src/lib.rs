@@ -306,7 +306,7 @@ mod tests {
         }"#;
         let mut parsed: AppSettings = serde_json::from_str(legacy_json)?;
         assert!(parsed.launch_at_startup);
-        assert_eq!(parsed.language, AppLanguage::Ru);
+        assert_eq!(parsed.language, AppLanguage::En);
         assert_eq!(parsed.theme, AppTheme::IkochDark);
         assert_eq!(parsed.theme.as_str(), "ikoch_dark");
         assert_eq!(parsed.custom_theme, CustomThemeColors::default());

@@ -952,7 +952,7 @@ fn mark_edited_sidecar(source_path: &Path, output_path: &Path, subclip_from_sess
                     || g_lower.starts_with("monitor")
                     || g_lower.starts_with("display")
                 {
-                    "Экран".to_string()
+                    "Screen".to_string()
                 } else {
                     src_meta.game_name
                 };
@@ -961,7 +961,7 @@ fn mark_edited_sidecar(source_path: &Path, output_path: &Path, subclip_from_sess
                     title: if subclip_from_session {
                         format!("{clean_game} • Sub-clip")
                     } else {
-                        format!("{clean_game} • Монтаж")
+                        format!("{clean_game} • Edited")
                     },
                     game_name: clean_game,
                     executable_name: src_meta.executable_name,

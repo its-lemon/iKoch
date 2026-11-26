@@ -20,8 +20,8 @@ interface I18nContextValue {
 }
 
 const I18nContext = createContext<I18nContextValue>({
-  lang: "ru",
-  t: ru,
+  lang: "en",
+  t: en,
 });
 
 export function I18nProvider({

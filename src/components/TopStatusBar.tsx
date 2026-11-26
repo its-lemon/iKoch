@@ -223,29 +223,11 @@ export function TopStatusBar({
           data-tauri-drag-region
           className="pointer-events-none flex items-center gap-2 pr-1"
         >
-          <svg
-            viewBox="0 0 24 24"
-            className="h-5 w-5 shrink-0"
-            fill="none"
-            aria-hidden="true"
-          >
-            <rect
-              x="1.5"
-              y="1.5"
-              width="21"
-              height="21"
-              rx="6"
-              fill="var(--bg-card)"
-              stroke="rgba(255,255,255,0.14)"
-              strokeWidth="1.2"
-            />
-            <circle cx="7.4" cy="7.3" r="1.45" fill="var(--accent)" />
-            <rect x="6.2" y="10.1" width="2.4" height="7.4" rx="1.1" fill="#F8FAFC" />
-            <path
-              d="M10.6 6.5H13V11.1L16.4 6.5H19.1L15.1 11.7L19.4 17.5H16.6L13 12.6V17.5H10.6V6.5Z"
-              fill="#F8FAFC"
-            />
-          </svg>
+          <img
+            src="/32x32.png"
+            alt="iKoch"
+            className="h-5 w-5 shrink-0 rounded-md object-contain"
+          />
           <span className="text-[13px] font-bold tracking-tight text-[var(--text-primary)]">
             iKoch
           </span>

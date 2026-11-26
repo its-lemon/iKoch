@@ -991,6 +991,8 @@ impl DaemonRuntime {
     }
 
     fn current_game_labels(&self) -> (String, String, Option<String>) {
+        let is_ru = self.settings.language == core_types::AppLanguage::Ru;
+        let screen_word = if is_ru { "Экран" } else { "Screen" };
         if let Some(g) = &self.active_game {
             let name = g.display_name.clone();
             (name.clone(), name, Some(g.executable_name.clone()))
@@ -1002,14 +1004,15 @@ impl DaemonRuntime {
                         .skip_while(|c| !c.is_ascii_digit())
                         .take_while(|c| c.is_ascii_digit())
                         .collect();
-                    let label = if mon_idx.is_empty() {
-                        "Экран (Монитор 1)".to_string()
+                    let mon_num = if mon_idx.is_empty() { "1" } else { mon_idx.as_str() };
+                    let label = if is_ru {
+                        format!("Экран (Монитор {mon_num})")
                     } else {
-                        format!("Экран (Монитор {mon_idx})")
+                        format!("Screen (Monitor {mon_num})")
                     };
-                    ("Экран".to_string(), label, None)
+                    (screen_word.to_string(), label, None)
                 }
-                CaptureTarget::AutoGame => ("Экран".to_string(), "Экран".to_string(), None),
+                CaptureTarget::AutoGame => (screen_word.to_string(), screen_word.to_string(), None),
                 CaptureTarget::SpecificWindow {
                     process_name,
                     title,
@@ -1036,9 +1039,14 @@ impl DaemonRuntime {
         markers: Vec<SessionMarker>,
         created_at: DateTime<Utc>,
     ) -> ClipMetadata {
+        let session_word = if self.settings.language == core_types::AppLanguage::Ru {
+            "Сессия"
+        } else {
+            "Session"
+        };
         let title = match kind {
             RecordingKind::Clip => title_base.to_string(),
-            RecordingKind::Session => format!("{title_base} • Сессия"),
+            RecordingKind::Session => format!("{title_base} • {session_word}"),
         };
 
         let mut audio_tracks = Vec::new();

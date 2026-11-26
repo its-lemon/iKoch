@@ -16,8 +16,8 @@ pub const MAX_REPLAY_DURATION_SECS: u32 = 300;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppLanguage {
-    #[default]
     Ru,
+    #[default]
     En,
 }
 
@@ -166,7 +166,7 @@ impl Default for AppSettings {
             schema_version: SETTINGS_SCHEMA_VERSION,
             launch_at_startup: false,
             check_updates_on_startup: true,
-            language: AppLanguage::Ru,
+            language: AppLanguage::En,
             theme: AppTheme::IkochDark,
             custom_theme: CustomThemeColors::default(),
             ui: UiSettings::default(),

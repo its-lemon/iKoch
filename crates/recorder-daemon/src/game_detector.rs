@@ -285,6 +285,43 @@ pub fn read_exe_version_description(exe_path: &Path) -> Option<String> {
     None
 }
 
+fn is_generic_runtime_description(desc: &str) -> bool {
+    let d = desc.trim().to_ascii_lowercase();
+    d.is_empty()
+        || d == ".net"
+        || d == "dotnet"
+        || d.starts_with(".net ")
+        || d.contains("microsoft .net")
+        || d.contains("java(tm) platform")
+        || d.contains("openjdk platform")
+        || d == "java"
+        || d == "electron"
+        || d.starts_with("electron ")
+}
+
+fn clean_window_title(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let before_dash = trimmed
+        .split(" - ")
+        .next()
+        .unwrap_or(trimmed)
+        .trim()
+        .trim_end_matches('*')
+        .trim();
+    let candidate = if before_dash.is_empty() {
+        trimmed
+    } else {
+        before_dash
+    };
+    if candidate.to_ascii_lowercase().starts_with("minecraft") {
+        return "Minecraft".to_string();
+    }
+    candidate.to_string()
+}
+
 /// Resolves a human-friendly game name using built-in dictionary, `.exe` VersionInfo,
 /// window title, or cleaned executable name.
 #[must_use]
@@ -297,14 +334,20 @@ pub fn resolve_human_game_name(
     if let Some(known) = lookup_builtin_game_title(&lower) {
         return known.to_string();
     }
-    if let Some(path) = exe_path {
-        if let Some(desc) = read_exe_version_description(path) {
-            return desc;
+    let version_desc = exe_path.and_then(read_exe_version_description);
+    if let Some(ref desc) = version_desc {
+        if !is_generic_runtime_description(desc) {
+            return desc.clone();
         }
     }
-    let clean_title = window_title.trim();
+    let clean_title = clean_window_title(window_title);
     if !clean_title.is_empty() {
-        return clean_title.to_string();
+        return clean_title;
+    }
+    if let Some(desc) = version_desc {
+        if !desc.trim().is_empty() {
+            return desc;
+        }
     }
     clean_exe_stem_title(exe_name)
 }
@@ -530,5 +573,17 @@ mod tests {
         // Arbitrary windowed app does not match unless fullscreen/borderless.
         assert!(classify_executable("notepad.exe", false, &cfg).is_none());
         assert!(classify_executable("unlisted_dx12.exe", true, &cfg).is_some());
+    }
+
+    #[test]
+    fn generic_runtime_descriptions_fall_back_to_cleaned_window_title() {
+        assert!(is_generic_runtime_description(".NET"));
+        assert!(is_generic_runtime_description("Microsoft .NET Host"));
+        assert!(is_generic_runtime_description("Java(TM) Platform SE binary"));
+        assert!(is_generic_runtime_description("Electron"));
+        assert!(!is_generic_runtime_description("Counter-Strike 2"));
+
+        assert_eq!(clean_window_title("tModLoader v2024.11.3.0"), "tModLoader v2024.11.3.0");
+        assert_eq!(clean_window_title("Minecraft* 1.21.4 - Singleplayer"), "Minecraft");
     }
 }

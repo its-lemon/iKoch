@@ -1,4 +1,5 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   Activity,
   Bell,
@@ -483,6 +484,13 @@ export function SettingsView({
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [appVersion, setAppVersion] = useState<string>("");
+
+  useEffect(() => {
+    getVersion()
+      .then((v) => setAppVersion(v))
+      .catch(() => {});
+  }, []);
 
   const handleCheckUpdates = async () => {
     setCheckingUpdates(true);
@@ -2807,7 +2815,8 @@ export function SettingsView({
                     <InfoTooltip text={t.settings.tips.updates} />
                   </div>
                   <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 font-mono text-[11px] font-semibold text-slate-300">
-                    {t.settings.currentVersionLabel}: v0.2.1
+                    {t.settings.currentVersionLabel}: v
+                    {updateInfo?.current_version || appVersion || "0.2.3"}
                   </span>
                 </div>
 

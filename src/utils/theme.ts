@@ -292,7 +292,7 @@ export function saveStoredTheme(
 
 export function loadStoredLanguage(): AppLanguage {
   const saved = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
-  return saved === "en" ? "en" : "ru";
+  return saved === "ru" ? "ru" : "en";
 }
 
 export function saveStoredLanguage(lang: AppLanguage): void {

@@ -32,6 +32,8 @@ import {
   deriveExportPath,
   formatBytes,
   formatTimePrecise,
+  localizeClipTitle,
+  localizeGameName,
   trackDisplayName,
   trackKindKey,
 } from "../utils/format";
@@ -974,10 +976,10 @@ export function EditorView({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-sm font-bold text-white">
-                {clip.title}
+                {localizeClipTitle(clip.title, lang)}
               </h2>
               <span className="shrink-0 rounded-md bg-[rgb(var(--accent-rgb)/0.16)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent-hover)]">
-                {clip.game_name}
+                {localizeGameName(clip.game_name, lang)}
               </span>
             </div>
             <p className="truncate text-[11px] text-slate-400">

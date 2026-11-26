@@ -18,7 +18,7 @@ export function formatTimePrecise(seconds: number): string {
     .padStart(2, "0")}.${tenths}`;
 }
 
-export function formatBytes(bytes: number, lang: AppLanguage = "ru"): string {
+export function formatBytes(bytes: number, lang: AppLanguage = "en"): string {
   const units =
     lang === "en" ? ["B", "KB", "MB", "GB", "TB"] : ["Б", "КБ", "МБ", "ГБ", "ТБ"];
   if (!Number.isFinite(bytes) || bytes <= 0) return `0 ${units[2]}`;
@@ -32,7 +32,7 @@ export function formatBytes(bytes: number, lang: AppLanguage = "ru"): string {
   return `${val.toFixed(precision)} ${units[idx]}`;
 }
 
-export function formatBytesCompact(bytes: number, lang: AppLanguage = "ru"): string {
+export function formatBytesCompact(bytes: number, lang: AppLanguage = "en"): string {
   const units =
     lang === "en" ? ["B", "KB", "MB", "GB", "TB"] : ["Б", "КБ", "МБ", "ГБ", "ТБ"];
   if (!Number.isFinite(bytes) || bytes <= 0) return `0 ${units[2]}`;
@@ -46,7 +46,7 @@ export function formatBytesCompact(bytes: number, lang: AppLanguage = "ru"): str
   return `${val.toFixed(precision)} ${units[idx]}`;
 }
 
-export function formatDate(iso: string, lang: AppLanguage = "ru"): string {
+export function formatDate(iso: string, lang: AppLanguage = "en"): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString(lang === "en" ? "en-US" : "ru-RU", {
@@ -213,4 +213,41 @@ export function deriveExportPath(
     return `${dir}${prefix}_${stamp}_${suffix}.${ext}`;
   }
   return `${dir}Edited\\${prefix}_${stamp}_${suffix}.${ext}`;
+}
+
+export function localizeGameName(
+  gameName: string | null | undefined,
+  lang: AppLanguage
+): string {
+  const raw = (gameName ?? "").trim();
+  const lower = raw.toLowerCase();
+  if (
+    !raw ||
+    lower === "экран" ||
+    lower === "screen" ||
+    lower === "desktop" ||
+    lower === "монитор" ||
+    lower === "monitor"
+  ) {
+    return lang === "en" ? "Screen" : "Экран";
+  }
+  return raw;
+}
+
+export function localizeClipTitle(title: string, lang: AppLanguage): string {
+  let next = title;
+  if (lang === "en") {
+    next = next
+      .replace(/^Экран\s*\(Монитор\s*(\d+)\)/i, "Screen (Monitor $1)")
+      .replace(/^Экран(?=$|\s*•)/i, "Screen")
+      .replace(/\s*•\s*Сессия$/i, " • Session")
+      .replace(/\s*•\s*Монтаж$/i, " • Edited");
+  } else {
+    next = next
+      .replace(/^Screen\s*\(Monitor\s*(\d+)\)/i, "Экран (Монитор $1)")
+      .replace(/^Screen(?=$|\s*•)/i, "Экран")
+      .replace(/\s*•\s*Session$/i, " • Сессия")
+      .replace(/\s*•\s*Edited$/i, " • Монтаж");
+  }
+  return next;
 }
