@@ -28,6 +28,10 @@
 - **Встроенный видеоредактор:** многодорожечный микшер (`0–500%` + Mute) и волны по каждой дорожке, закладки `F8`, нарезка сегментов одного клипа, **«Заменить текущий клип» / «Сохранить как новый»**, скорость `0.25x–4.0x`, сжатие под Discord (`10 / 50 / Custom МБ`), копирование файла в буфер (`Ctrl+V`), экспорт в `GIF` и `PNG`.
 - **Полная кастомизация:** 8 тем + конструктор своей темы, `RU/EN` языки, подсказки `(?)`, авто-очистка кэша, квота диска, автозапуск и автообновление через GitHub Releases.
 
+### 📥 Установка и требования
+- **ОС:** Windows 10 (64-bit) или Windows 11. Для изолированного захвата звука отдельных приложений (`Process Loopback`) требуется **Windows 10 build 20348+** / **Windows 11**; на более старых сборках Windows 10 работают стандартный системный `WASAPI Loopback` и `DXGI Desktop Duplication` без жёлтой рамки.
+- **Про Windows Defender SmartScreen:** так как это бесплатный open-source проект без платного коммерческого сертификата подписи кода, Windows может показать предупреждение SmartScreen при первом запуске установщика. Нажмите **Подробнее** → **Выполнить в любом случае** — весь исходный код полностью открыт для проверки.
+
 ### 📁 Где лежат ваши видео
 Внутри выбранной папки (по умолчанию `Видео\iKoch\`):
 - **`Clips\<Игра или Screen>\`** — мгновенные откаты (`F9`)
@@ -54,7 +58,18 @@
 
 **Сборка из исходников:**
 1. Установите **Rust (1.82+)** и **Node.js (20+)**.
-2. Поместите `ffmpeg-x86_64-pc-windows-msvc.exe` и `ffprobe-x86_64-pc-windows-msvc.exe` в `src-tauri/binaries/` (исключены из Git из-за лимита GitHub в 100 МБ).
+2. Скачайте и поместите `ffmpeg-x86_64-pc-windows-msvc.exe` и `ffprobe-x86_64-pc-windows-msvc.exe` в `src-tauri/binaries/` (исключены из Git из-за лимита GitHub в 100 МБ) с помощью PowerShell:
+   ```powershell
+   $zip = "$env:TEMP\ffmpeg-release-essentials.zip"
+   $tmp = "$env:TEMP\ffmpeg-extract"
+   Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
+   Expand-Archive -Path $zip -DestinationPath $tmp -Force
+   $bin = (Get-ChildItem -Path $tmp -Directory | Select-Object -First 1).FullName + "\bin"
+   New-Item -ItemType Directory -Force -Path "src-tauri\binaries" | Out-Null
+   Copy-Item "$bin\ffmpeg.exe" "src-tauri\binaries\ffmpeg-x86_64-pc-windows-msvc.exe" -Force
+   Copy-Item "$bin\ffprobe.exe" "src-tauri\binaries\ffprobe-x86_64-pc-windows-msvc.exe" -Force
+   Remove-Item $zip, $tmp -Recurse -Force
+   ```
 3. Выполните:
    ```powershell
    npm install

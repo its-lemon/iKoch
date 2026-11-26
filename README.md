@@ -32,6 +32,10 @@
 - **Built-in Clip Editor:** Multi-track audio mixer (`0–500%` + Mute) and per-track waveforms, `F8` markers, single-clip multi-segment trim/cut, **Replace current clip** / **Save as new**, `0.25x–4.0x` playback speed, **Discord compression** (`10 / 50 / Custom MB`), instant clipboard copy (`Ctrl+V`), `GIF` and `PNG` frame export.
 - **Full Customization & Housekeeping:** 8 themes + custom color builder, `RU/EN` UI, `(?)` tooltips, automatic editor cache cleanup, disk quota & age limits, Windows autostart, and automatic updates via GitHub Releases.
 
+### 📥 Installation & Requirements
+- **OS:** Windows 10 (64-bit) or Windows 11. Isolated per-application audio capture (`Process Loopback`) requires **Windows 10 build 20348+** / **Windows 11**; on older Windows 10 builds, standard system `WASAPI Loopback` and `DXGI Desktop Duplication` (without the yellow capture border) work automatically.
+- **SmartScreen Note:** Because iKoch is a free open-source project without a paid commercial code-signing certificate, Windows Defender SmartScreen may show a warning on the first installer launch. Click **More info** → **Run anyway** — all source code is open in this repository for full inspection.
+
 ### 📁 Output Folders
 Inside your clips folder (default `Videos\iKoch\`):
 - **`Clips\<Game or Screen>\`** — instant replay clips (`F9`)
@@ -58,7 +62,18 @@ Inside your clips folder (default `Videos\iKoch\`):
 
 **Build from source:**
 1. Install **Rust (1.82+)** and **Node.js (20+)**.
-2. Place `ffmpeg-x86_64-pc-windows-msvc.exe` and `ffprobe-x86_64-pc-windows-msvc.exe` into `src-tauri/binaries/` (excluded from Git due to GitHub's 100 MiB file limit).
+2. Download and place `ffmpeg-x86_64-pc-windows-msvc.exe` and `ffprobe-x86_64-pc-windows-msvc.exe` into `src-tauri/binaries/` (excluded from Git due to GitHub's 100 MiB file limit) using PowerShell:
+   ```powershell
+   $zip = "$env:TEMP\ffmpeg-release-essentials.zip"
+   $tmp = "$env:TEMP\ffmpeg-extract"
+   Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
+   Expand-Archive -Path $zip -DestinationPath $tmp -Force
+   $bin = (Get-ChildItem -Path $tmp -Directory | Select-Object -First 1).FullName + "\bin"
+   New-Item -ItemType Directory -Force -Path "src-tauri\binaries" | Out-Null
+   Copy-Item "$bin\ffmpeg.exe" "src-tauri\binaries\ffmpeg-x86_64-pc-windows-msvc.exe" -Force
+   Copy-Item "$bin\ffprobe.exe" "src-tauri\binaries\ffprobe-x86_64-pc-windows-msvc.exe" -Force
+   Remove-Item $zip, $tmp -Recurse -Force
+   ```
 3. Run:
    ```powershell
    npm install
@@ -88,6 +103,10 @@ Inside your clips folder (default `Videos\iKoch\`):
 - **Встроенный видеоредактор:** многодорожечный микшер (`0–500%` + Mute) и волны по каждой дорожке, закладки `F8`, нарезка сегментов одного клипа, **«Заменить текущий клип» / «Сохранить как новый»**, скорость `0.25x–4.0x`, сжатие под Discord (`10 / 50 / Custom МБ`), копирование файла в буфер (`Ctrl+V`), экспорт в `GIF` и `PNG`.
 - **Полная кастомизация:** 8 тем + конструктор своей темы, `RU/EN` языки, подсказки `(?)`, авто-очистка кэша, квота диска, автозапуск и автообновление через GitHub Releases.
 
+### 📥 Установка и требования
+- **ОС:** Windows 10 (64-bit) или Windows 11. Для изолированного захвата звука отдельных приложений (`Process Loopback`) требуется **Windows 10 build 20348+** / **Windows 11**; на более старых сборках Windows 10 работают стандартный системный `WASAPI Loopback` и `DXGI Desktop Duplication` без жёлтой рамки.
+- **Про Windows Defender SmartScreen:** так как это бесплатный open-source проект без платного коммерческого сертификата подписи кода, Windows может показать предупреждение SmartScreen при первом запуске установщика. Нажмите **Подробнее** → **Выполнить в любом случае** — весь исходный код полностью открыт для проверки.
+
 ### 📁 Где лежат ваши видео
 Внутри выбранной папки (по умолчанию `Видео\iKoch\`):
 - **`Clips\<Игра или Screen>\`** — мгновенные откаты (`F9`)
@@ -114,7 +133,18 @@ Inside your clips folder (default `Videos\iKoch\`):
 
 **Сборка из исходников:**
 1. Установите **Rust (1.82+)** и **Node.js (20+)**.
-2. Поместите `ffmpeg-x86_64-pc-windows-msvc.exe` и `ffprobe-x86_64-pc-windows-msvc.exe` в `src-tauri/binaries/` (исключены из Git из-за лимита GitHub в 100 МБ).
+2. Скачайте и поместите `ffmpeg-x86_64-pc-windows-msvc.exe` и `ffprobe-x86_64-pc-windows-msvc.exe` в `src-tauri/binaries/` (исключены из Git из-за лимита GitHub в 100 МБ) с помощью PowerShell:
+   ```powershell
+   $zip = "$env:TEMP\ffmpeg-release-essentials.zip"
+   $tmp = "$env:TEMP\ffmpeg-extract"
+   Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
+   Expand-Archive -Path $zip -DestinationPath $tmp -Force
+   $bin = (Get-ChildItem -Path $tmp -Directory | Select-Object -First 1).FullName + "\bin"
+   New-Item -ItemType Directory -Force -Path "src-tauri\binaries" | Out-Null
+   Copy-Item "$bin\ffmpeg.exe" "src-tauri\binaries\ffmpeg-x86_64-pc-windows-msvc.exe" -Force
+   Copy-Item "$bin\ffprobe.exe" "src-tauri\binaries\ffprobe-x86_64-pc-windows-msvc.exe" -Force
+   Remove-Item $zip, $tmp -Recurse -Force
+   ```
 3. Выполните:
    ```powershell
    npm install
