@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Code2,
   Cpu,
@@ -16,14 +16,50 @@ import { SimulatorApp } from "./simulator/SimulatorApp";
 import { THEME_PRESETS } from "./themes";
 
 const RELEASES_URL = "https://github.com/its-lemon/iKoch/releases/latest";
+const GITHUB_LATEST_API = "https://api.github.com/repos/its-lemon/iKoch/releases/latest";
 const REPO_URL = "https://github.com/its-lemon/iKoch";
 
 export function App() {
   const [lang, setLang] = useState<Lang>("ru");
+  const [version, setVersion] = useState<string>(__IKOCH_VERSION__);
+  const [downloadUrl, setDownloadUrl] = useState<string>(RELEASES_URL);
   const [activeAccent, setActiveAccent] = useState<string>(THEME_PRESETS[0].accent);
   const [activeBgPanel, setActiveBgPanel] = useState<string>(THEME_PRESETS[0].bgPanel);
   const [activeBgCard, setActiveBgCard] = useState<string>(THEME_PRESETS[0].bgCard);
   const t = COPY[lang];
+
+  useEffect(() => {
+    let active = true;
+    fetch(GITHUB_LATEST_API, {
+      headers: { Accept: "application/vnd.github+json" },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then(
+        (
+          data: {
+            tag_name?: string;
+            html_url?: string;
+            assets?: { name?: string; browser_download_url?: string }[];
+          } | null
+        ) => {
+          if (!active || !data) return;
+          const cleanTag = data.tag_name?.trim().replace(/^v/i, "");
+          if (cleanTag) setVersion(cleanTag);
+          const exeAsset = data.assets?.find((a) =>
+            a.name?.toLowerCase().endsWith(".exe")
+          );
+          if (exeAsset?.browser_download_url) {
+            setDownloadUrl(exeAsset.browser_download_url);
+          } else if (data.html_url) {
+            setDownloadUrl(data.html_url);
+          }
+        }
+      )
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleSyncAccent = useCallback(
     (accentHex: string, bgPanelHex?: string, bgCardHex?: string) => {
@@ -63,7 +99,7 @@ export function App() {
             />
             <span className="text-base font-extrabold tracking-tight text-white">iKoch</span>
             <span className="hidden rounded-full bg-white/[0.06] px-2.5 py-0.5 text-[11px] font-medium text-slate-300 sm:inline-block">
-              v0.2.2
+              v{version}
             </span>
           </div>
 
@@ -86,14 +122,14 @@ export function App() {
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
             <a
-              href={RELEASES_URL}
+              href={downloadUrl}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-bold text-white shadow-lg transition hover:opacity-90"
               style={{ backgroundColor: activeAccent }}
             >
               <Download className="h-3.5 w-3.5" />
-              {t.downloadBtn}
+              {t.downloadBtn(version)}
             </a>
           </div>
         </div>
@@ -104,7 +140,7 @@ export function App() {
         <section className="text-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-1 text-xs font-semibold text-slate-300">
             <Sparkles className="h-3.5 w-3.5" style={{ color: activeAccent }} />
-            {t.badge}
+            {t.badge(version)}
           </div>
           <h1 className="mx-auto mt-5 max-w-3xl text-3xl font-black tracking-tight text-white sm:text-5xl">
             {t.tagline}
@@ -115,14 +151,14 @@ export function App() {
 
           <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
             <a
-              href={RELEASES_URL}
+              href={downloadUrl}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-xl transition hover:scale-[1.02]"
               style={{ backgroundColor: activeAccent }}
             >
               <Download className="h-4 w-4" />
-              {t.downloadBtn}
+              {t.downloadBtn(version)}
             </a>
             <a
               href={REPO_URL}
@@ -195,14 +231,14 @@ export function App() {
               <p className="mt-2 max-w-2xl text-sm text-slate-300">{t.installSub}</p>
             </div>
             <a
-              href={RELEASES_URL}
+              href={downloadUrl}
               target="_blank"
               rel="noreferrer"
               className="inline-flex shrink-0 items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-lg transition hover:opacity-90"
               style={{ backgroundColor: activeAccent }}
             >
               <Download className="h-4 w-4" />
-              {t.installBtn}
+              {t.installBtn(version)}
             </a>
           </div>
 
@@ -218,7 +254,7 @@ export function App() {
 
       <footer className="border-t border-white/[0.07] py-7">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 text-xs text-slate-500 sm:flex-row sm:px-6">
-          <span>{t.footerNote}</span>
+          <span>{t.footerNote(version)}</span>
           <div className="flex items-center gap-4">
             <a href={REPO_URL} target="_blank" rel="noreferrer" className="hover:text-slate-300">
               GitHub

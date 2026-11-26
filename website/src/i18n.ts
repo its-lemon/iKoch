@@ -2,11 +2,11 @@ export type Lang = "ru" | "en";
 
 export const COPY = {
   ru: {
-    badge: "Open Source • Rust + Tauri v2 • v0.2.2",
+    badge: (v: string) => `Open Source • Rust + Tauri v2 • v${v}`,
     tagline: "Лёгкий open-source аналог Medal.tv и ShadowPlay на Rust",
     heroDesc:
       "Мгновенные откаты (F9), запись сессий (F10), разделение звука по приложениям (Игра / Discord / Музыка / Мик) и встроенный редактор под Discord — без рекламы, аккаунтов и телеметрии.",
-    downloadBtn: "Скачать для Windows (v0.2.2)",
+    downloadBtn: (v: string) => `Скачать для Windows (v${v})`,
     githubBtn: "GitHub",
     trustLine: "Windows 10/11 x64 • ~58 МБ • Без рекламы и аккаунтов",
     tryDemoHint: "Живое окно iKoch прямо в браузере — переключайте вкладки и настраивайте темы",
@@ -47,18 +47,18 @@ export const COPY = {
     installTitle: "Установка на Windows 10 / 11",
     installSub:
       "Требуется 64-битная Windows 10 или Windows 11. Изолированный захват звука приложений (Process Loopback) поддерживается на Win 10 build 20348+ и Windows 11.",
-    installBtn: "Скачать iKoch_0.2.2_x64-setup.exe",
+    installBtn: (v: string) => `Скачать iKoch_${v}_x64-setup.exe`,
     smartScreenTitle: "Если Windows Defender SmartScreen показал предупреждение",
     smartScreenDesc:
       "iKoch — бесплатный open-source проект без платного коммерческого сертификата подписи кода. При первом запуске установщика нажмите «Подробнее» → «Выполнить в любом случае». Весь код открыт на GitHub.",
-    footerNote: "iKoch v0.2.2 • Rust + Tauri v2 • Лицензия MIT",
+    footerNote: (v: string) => `iKoch v${v} • Rust + Tauri v2 • Лицензия MIT`,
   },
   en: {
-    badge: "Open Source • Rust + Tauri v2 • v0.2.2",
+    badge: (v: string) => `Open Source • Rust + Tauri v2 • v${v}`,
     tagline: "Lightweight open-source Medal.tv & ShadowPlay alternative in Rust",
     heroDesc:
       "Instant replays (F9), crash-safe sessions (F10), per-app audio separation (Game / Discord / Music / Mic), and built-in Discord editor — zero ads, no accounts, no telemetry.",
-    downloadBtn: "Download for Windows (v0.2.2)",
+    downloadBtn: (v: string) => `Download for Windows (v${v})`,
     githubBtn: "GitHub",
     trustLine: "Windows 10/11 x64 • ~58 MB • No ads or accounts",
     tryDemoHint: "Live iKoch window in your browser — click tabs, mix tracks, and switch themes",
@@ -99,10 +99,10 @@ export const COPY = {
     installTitle: "Installation for Windows 10 / 11",
     installSub:
       "Requires 64-bit Windows 10 or Windows 11. Isolated per-app audio capture (Process Loopback) requires Windows 10 build 20348+ or Windows 11.",
-    installBtn: "Download iKoch_0.2.2_x64-setup.exe",
+    installBtn: (v: string) => `Download iKoch_${v}_x64-setup.exe`,
     smartScreenTitle: "Windows Defender SmartScreen Notice",
     smartScreenDesc:
       "iKoch is a free open-source project without a paid commercial code-signing certificate. On first installer launch, click \"More info\" → \"Run anyway\". All source code is open on GitHub.",
-    footerNote: "iKoch v0.2.2 • Rust + Tauri v2 • MIT License",
+    footerNote: (v: string) => `iKoch v${v} • Rust + Tauri v2 • MIT License`,
   },
 } as const;

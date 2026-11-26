@@ -2807,7 +2807,8 @@ export function SettingsView({
                     <InfoTooltip text={t.settings.tips.updates} />
                   </div>
                   <span className="rounded-full bg-white/[0.06] px-2.5 py-0.5 font-mono text-[11px] font-semibold text-slate-300">
-                    {t.settings.currentVersionLabel}: v0.2.1
+                    {t.settings.currentVersionLabel}: v
+                    {updateInfo?.current_version || __IKOCH_VERSION__}
                   </span>
                 </div>
 

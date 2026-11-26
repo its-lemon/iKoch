@@ -749,8 +749,8 @@ export const api = {
 
   checkForUpdates: async (): Promise<UpdateInfo> => ({
     has_update: false,
-    current_version: "0.2.2",
-    latest_version: "0.2.2",
+    current_version: __IKOCH_VERSION__,
+    latest_version: __IKOCH_VERSION__,
     release_notes: "Zero-Copy GPU & WebView2 memory optimizations.",
     download_url: null,
     installer_name: null,
