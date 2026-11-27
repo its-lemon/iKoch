@@ -353,33 +353,24 @@ export function App() {
     );
   };
 
-  const handleSaveSettings = async (next: AppSettings) => {
-    const saved = await api.saveSettings(next);
-    setSettings(saved);
-    setPreviewTheme(null);
-    setPreviewCustomTheme(null);
-    setPreviewUi(null);
-    setPreviewLang(null);
-    const snap = await api.getDaemonState();
-    setDaemon(snap);
-    await refreshClips();
-  };
+  const handleSaveSettings = useCallback(
+    async (next: AppSettings) => {
+      const saved = await api.saveSettings(next);
+      setSettings(saved);
+      setPreviewTheme(null);
+      setPreviewCustomTheme(null);
+      setPreviewUi(null);
+      setPreviewLang(null);
+      const snap = await api.getDaemonState();
+      setDaemon(snap);
+      await refreshClips();
+    },
+    [refreshClips]
+  );
 
-  const handleChangeLanguageInstant = async (lang: AppLanguage) => {
+  const handleChangeLanguageInstant = (lang: AppLanguage) => {
     setPreviewLang(lang);
     saveStoredLanguage(lang);
-    if (!settings) return;
-    try {
-      const saved = await api.saveSettings({ ...settings, language: lang });
-      setSettings(saved);
-      setPreviewLang(null);
-    } catch (err) {
-      notify(
-        getTranslations(lang).settings.saveErrorTitle,
-        String(err),
-        "error"
-      );
-    }
   };
 
   const handleOpenFolder = () => {

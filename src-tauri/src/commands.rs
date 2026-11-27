@@ -43,8 +43,14 @@ pub fn save_settings(
     mut settings: AppSettings,
 ) -> Result<AppSettings, String> {
     settings.normalize();
-    crate::autostart::sync_windows_autostart(settings.launch_at_startup)?;
-    state.persist_settings(&settings)?;
+    crate::autostart::sync_windows_autostart(settings.launch_at_startup).map_err(|e| {
+        tracing::error!("save_settings autostart sync failed: {e}");
+        e
+    })?;
+    state.persist_settings(&settings).map_err(|e| {
+        tracing::error!("save_settings persist_settings failed: {e}");
+        e
+    })?;
     allow_directory_in_asset_scope(&app, &settings.storage.output_dir);
     allow_directory_in_asset_scope(&app, &settings.storage.temp_dir);
     let lang = settings.language;
@@ -56,7 +62,12 @@ pub fn save_settings(
         settings.video.fps,
         settings.video.gop_seconds
     );
-    state.send_command(RecorderCommand::UpdateSettings(Box::new(settings.clone())))?;
+    state
+        .send_command(RecorderCommand::UpdateSettings(Box::new(settings.clone())))
+        .map_err(|e| {
+            tracing::error!("save_settings UpdateSettings failed: {e}");
+            e
+        })?;
     if let Some(tray) = app.try_state::<crate::tray::TrayController>() {
         tray.refresh_with_language(&app, &state.state_snapshot(), lang);
     }

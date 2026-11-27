@@ -333,9 +333,21 @@ export function SettingsView({
     normalizeCustomColors(settings.custom_theme)
   );
   const prevSettingsRef = useRef<AppSettings>(settings);
+  const latestDraftRef = useRef<AppSettings>(draft);
+  const onSaveRef = useRef(onSaveSettings);
+  const onNotifyRef = useRef(onNotify);
+  const saveErrorTitleRef = useRef(t.settings.saveErrorTitle);
+  onSaveRef.current = onSaveSettings;
+  onNotifyRef.current = onNotify;
+  saveErrorTitleRef.current = t.settings.saveErrorTitle;
+
   const [saving, setSaving] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const autoSaveTimerRef = useRef<number | null>(null);
+  const savedBadgeTimerRef = useRef<number | null>(null);
+  const pendingDebouncedSaveRef = useRef(false);
+  const inFlightSaveCountRef = useRef(0);
+  const mountedRef = useRef(true);
 
   const [outDevices, setOutDevices] = useState<AudioDeviceInfo[]>([]);
   const [inDevices, setInDevices] = useState<AudioDeviceInfo[]>([]);
@@ -361,17 +373,17 @@ export function SettingsView({
   useEffect(() => {
     const prev = prevSettingsRef.current;
     prevSettingsRef.current = settings;
-    const onlyLanguageChanged =
-      prev.language !== settings.language &&
-      JSON.stringify({ ...prev, language: settings.language }) ===
-        JSON.stringify(settings);
-
-    if (onlyLanguageChanged) {
-      setDraft((d) => ({ ...d, language: settings.language }));
+    if (
+      inFlightSaveCountRef.current > 0 ||
+      pendingDebouncedSaveRef.current ||
+      JSON.stringify(prev) === JSON.stringify(settings)
+    ) {
       return;
     }
 
-    setDraft(structuredClone(settings));
+    const cloned = structuredClone(settings);
+    latestDraftRef.current = cloned;
+    setDraft(cloned);
     setHexInputs(normalizeCustomColors(settings.custom_theme));
   }, [settings]);
 
@@ -491,40 +503,95 @@ export function SettingsView({
     void loadAudioDevices();
   }, [loadAudioDevices]);
 
-  // Auto-save settings on the fly whenever `draft` diverges from `settings`.
-  useEffect(() => {
-    if (JSON.stringify(draft) === JSON.stringify(settings)) {
-      return;
-    }
+  const executeSave = useCallback((next: AppSettings) => {
     if (autoSaveTimerRef.current !== null) {
       window.clearTimeout(autoSaveTimerRef.current);
-    }
-    autoSaveTimerRef.current = window.setTimeout(() => {
       autoSaveTimerRef.current = null;
+    }
+    pendingDebouncedSaveRef.current = false;
+    inFlightSaveCountRef.current += 1;
+    if (mountedRef.current) {
       setSaving(true);
-      void onSaveSettings(draft)
-        .then(() => {
-          setJustSaved(true);
-          window.setTimeout(() => setJustSaved(false), 2200);
-        })
-        .catch((err) => {
-          onNotify(t.settings.saveErrorTitle, String(err), "error");
-        })
-        .finally(() => {
-          setSaving(false);
-        });
-    }, 280);
+    }
+    void onSaveRef
+      .current(next)
+      .then(() => {
+        if (!mountedRef.current) return;
+        setJustSaved(true);
+        if (savedBadgeTimerRef.current !== null) {
+          window.clearTimeout(savedBadgeTimerRef.current);
+        }
+        savedBadgeTimerRef.current = window.setTimeout(() => {
+          savedBadgeTimerRef.current = null;
+          if (mountedRef.current) setJustSaved(false);
+        }, 2200);
+      })
+      .catch((err) => {
+        if (mountedRef.current) setJustSaved(false);
+        onNotifyRef.current(saveErrorTitleRef.current, String(err), "error");
+      })
+      .finally(() => {
+        inFlightSaveCountRef.current = Math.max(
+          0,
+          inFlightSaveCountRef.current - 1
+        );
+        if (mountedRef.current) {
+          setSaving(inFlightSaveCountRef.current > 0);
+        }
+      });
+  }, []);
 
+  const updateImmediate = useCallback(
+    (updater: (prev: AppSettings) => AppSettings) => {
+      const next = updater(latestDraftRef.current);
+      latestDraftRef.current = next;
+      setDraft(next);
+      executeSave(next);
+    },
+    [executeSave]
+  );
+
+  const updateDebounced = useCallback(
+    (updater: (prev: AppSettings) => AppSettings) => {
+      const next = updater(latestDraftRef.current);
+      latestDraftRef.current = next;
+      setDraft(next);
+      pendingDebouncedSaveRef.current = true;
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
+      autoSaveTimerRef.current = window.setTimeout(() => {
+        autoSaveTimerRef.current = null;
+        executeSave(latestDraftRef.current);
+      }, 220);
+    },
+    [executeSave]
+  );
+
+  // Flush any pending debounced slider/input change when leaving Settings.
+  useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      if (savedBadgeTimerRef.current !== null) {
+        window.clearTimeout(savedBadgeTimerRef.current);
+        savedBadgeTimerRef.current = null;
+      }
       if (autoSaveTimerRef.current !== null) {
         window.clearTimeout(autoSaveTimerRef.current);
         autoSaveTimerRef.current = null;
       }
+      if (pendingDebouncedSaveRef.current) {
+        pendingDebouncedSaveRef.current = false;
+        void onSaveRef.current(latestDraftRef.current).catch((err) => {
+          onNotifyRef.current(saveErrorTitleRef.current, String(err), "error");
+        });
+      }
     };
-  }, [draft, onNotify, onSaveSettings, settings, t.settings.saveErrorTitle]);
+  }, []);
 
   const handleSelectLanguage = (nextLang: AppLanguage) => {
-    setDraft((p) => ({ ...p, language: nextLang }));
+    updateImmediate((p) => ({ ...p, language: nextLang }));
     onChangeLanguageInstant(nextLang);
   };
 
@@ -537,10 +604,10 @@ export function SettingsView({
       const cleanHex = rawValue.trim().toUpperCase();
       setHexInputs((prev) => ({ ...prev, [field]: cleanHex }));
       const nextCustom = normalizeCustomColors({
-        ...draft.custom_theme,
+        ...latestDraftRef.current.custom_theme,
         [field]: cleanHex,
       });
-      setDraft((p) => ({
+      updateDebounced((p) => ({
         ...p,
         theme: "custom",
         custom_theme: nextCustom,
@@ -553,7 +620,7 @@ export function SettingsView({
   const handleResetCustomTheme = () => {
     const reset = { ...DEFAULT_CUSTOM_THEME };
     setHexInputs(reset);
-    setDraft((p) => ({
+    updateImmediate((p) => ({
       ...p,
       theme: "custom",
       custom_theme: reset,
@@ -732,7 +799,7 @@ export function SettingsView({
     key: keyof AppSettings["notifications"]["sounds"],
     updater: (prev: NotificationSoundEntry) => NotificationSoundEntry
   ) => {
-    setDraft((prev) => ({
+    updateImmediate((prev) => ({
       ...prev,
       notifications: {
         ...prev.notifications,
@@ -932,7 +999,7 @@ export function SettingsView({
 
   const updateUiSetting = (patch: Partial<UiSettings>) => {
     const nextUi: UiSettings = { ...currentUi, ...patch };
-    setDraft((p) => ({ ...p, ui: nextUi }));
+    updateImmediate((p) => ({ ...p, ui: nextUi }));
     onPreviewUi(nextUi);
   };
 
@@ -1094,7 +1161,7 @@ export function SettingsView({
                     onChange={(val) => {
                       const found = targetOptions.find((o) => o.key === val);
                       if (found) {
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           capture: { ...p.capture, target: found.target },
                         }));
@@ -1128,7 +1195,7 @@ export function SettingsView({
                               : choice === "p1440"
                                 ? { preset: "custom", width: 2560, height: 1440 }
                                 : { preset: "native" };
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           video: { ...p.video, resolution: nextRes },
                         }));
@@ -1148,7 +1215,7 @@ export function SettingsView({
                         label: `${f} FPS`,
                       }))}
                       onChange={(val) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           video: { ...p.video, fps: Number(val) },
                         }))
@@ -1179,7 +1246,7 @@ export function SettingsView({
                         },
                       ]}
                       onChange={(val) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           video: {
                             ...p.video,
@@ -1221,7 +1288,7 @@ export function SettingsView({
                                     draft.video.bitrate_kbps === 25000
                                   ? 18000
                                   : draft.video.bitrate_kbps;
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           video: { ...p.video, bitrate_kbps: kbps },
                         }));
@@ -1239,7 +1306,7 @@ export function SettingsView({
                   step={1000}
                   value={draft.video.bitrate_kbps}
                   onChange={(val) =>
-                    setDraft((p) => ({
+                    updateDebounced((p) => ({
                       ...p,
                       video: { ...p.video, bitrate_kbps: val },
                     }))
@@ -1260,7 +1327,7 @@ export function SettingsView({
                         value={draft.capture.hdr_mode}
                         options={hdrOptions}
                         onChange={(val) =>
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             capture: {
                               ...p.capture,
@@ -1281,7 +1348,7 @@ export function SettingsView({
                         value={draft.video.gpu_vendor}
                         options={gpuOptions}
                         onChange={(val) =>
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             video: {
                               ...p.video,
@@ -1302,7 +1369,7 @@ export function SettingsView({
                         value={draft.video.rate_control}
                         options={rateControlOptions}
                         onChange={(val) =>
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             video: {
                               ...p.video,
@@ -1319,7 +1386,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.capture.capture_cursor}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           capture: { ...p.capture, capture_cursor: v },
                         }))
@@ -1330,7 +1397,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.capture.capture_border}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           capture: { ...p.capture, capture_border: v },
                         }))
@@ -1371,7 +1438,7 @@ export function SettingsView({
                       { value: "300", label: `5${minShortUnit}` },
                     ]}
                     onChange={(val) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         replay_buffer: {
                           ...p.replay_buffer,
@@ -1388,7 +1455,7 @@ export function SettingsView({
                     step={5}
                     value={draft.replay_buffer.duration_secs}
                     onChange={(val) =>
-                      setDraft((p) => ({
+                      updateDebounced((p) => ({
                         ...p,
                         replay_buffer: {
                           ...p.replay_buffer,
@@ -1403,7 +1470,7 @@ export function SettingsView({
                   <ToggleSwitch
                     checked={draft.replay_buffer.enabled}
                     onChange={(v) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         replay_buffer: { ...p.replay_buffer, enabled: v },
                       }))
@@ -1414,7 +1481,7 @@ export function SettingsView({
                   <ToggleSwitch
                     checked={draft.replay_buffer.reset_buffer_on_clip}
                     onChange={(v) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         replay_buffer: {
                           ...p.replay_buffer,
@@ -1440,7 +1507,7 @@ export function SettingsView({
                     step={64}
                     value={draft.replay_buffer.max_ram_mb}
                     onChange={(val) =>
-                      setDraft((p) => ({
+                      updateDebounced((p) => ({
                         ...p,
                         replay_buffer: {
                           ...p.replay_buffer,
@@ -1470,7 +1537,7 @@ export function SettingsView({
                   <ToggleSwitch
                     checked={draft.capture.games.auto_start}
                     onChange={(v) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         capture: {
                           ...p.capture,
@@ -1484,7 +1551,7 @@ export function SettingsView({
                   <ToggleSwitch
                     checked={draft.capture.games.use_builtin_game_list}
                     onChange={(v) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         capture: {
                           ...p.capture,
@@ -1513,7 +1580,7 @@ export function SettingsView({
                       step={1}
                       value={draft.capture.games.auto_pause_delay_secs}
                       onChange={(val) =>
-                        setDraft((p) => ({
+                        updateDebounced((p) => ({
                           ...p,
                           capture: {
                             ...p.capture,
@@ -1536,7 +1603,7 @@ export function SettingsView({
                       emptyLabel={t.settings.exeListEmpty}
                       items={draft.capture.games.custom_whitelist_exes}
                       onChange={(next) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           capture: {
                             ...p.capture,
@@ -1556,7 +1623,7 @@ export function SettingsView({
                       emptyLabel={t.settings.exeListEmpty}
                       items={draft.capture.games.blacklist_exes}
                       onChange={(next) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           capture: {
                             ...p.capture,
@@ -1612,7 +1679,7 @@ export function SettingsView({
                                   mode: "specific_device",
                                   device_id: val.slice(5),
                                 } as const);
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, audio_output_mode: nextMode },
                         }));
@@ -1631,7 +1698,7 @@ export function SettingsView({
                       options={secondaryAudioOptions}
                       onChange={(val) => {
                         const v = val || null;
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, secondary_output_device: v },
                         }));
@@ -1662,7 +1729,7 @@ export function SettingsView({
                                   mode: "specific_device",
                                   device_id: val.slice(5),
                                 } as const);
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: {
                             ...p.audio,
@@ -1725,7 +1792,7 @@ export function SettingsView({
                     step={0.05}
                     value={draft.audio.game_volume}
                     onChange={(v) => {
-                      setDraft((p) => ({
+                      updateDebounced((p) => ({
                         ...p,
                         audio: { ...p.audio, game_volume: v },
                       }));
@@ -1745,7 +1812,7 @@ export function SettingsView({
                     step={0.05}
                     value={draft.audio.mic_volume}
                     onChange={(v) => {
-                      setDraft((p) => ({
+                      updateDebounced((p) => ({
                         ...p,
                         audio: { ...p.audio, mic_volume: v },
                       }));
@@ -1767,7 +1834,7 @@ export function SettingsView({
                     step={0.05}
                     value={draft.audio.secondary_volume}
                     onChange={(v) => {
-                      setDraft((p) => ({
+                      updateDebounced((p) => ({
                         ...p,
                         audio: { ...p.audio, secondary_volume: v },
                       }));
@@ -1813,7 +1880,7 @@ export function SettingsView({
                           muted: false,
                           enabled: true,
                         };
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: {
                             ...p.audio,
@@ -1869,7 +1936,7 @@ export function SettingsView({
                                 muted: false,
                                 enabled: true,
                               };
-                              setDraft((p) => ({
+                              updateImmediate((p) => ({
                                 ...p,
                                 audio: {
                                   ...p.audio,
@@ -1920,7 +1987,7 @@ export function SettingsView({
                               placeholder={t.settings.appAudioSlotNamePlaceholder}
                               onChange={(e) => {
                                 const val = e.target.value;
-                                setDraft((p) => ({
+                                updateDebounced((p) => ({
                                   ...p,
                                   audio: {
                                     ...p.audio,
@@ -1947,7 +2014,7 @@ export function SettingsView({
                                   .split(",")
                                   .map((s) => s.trim())
                                   .filter(Boolean);
-                                setDraft((p) => ({
+                                updateDebounced((p) => ({
                                   ...p,
                                   audio: {
                                     ...p.audio,
@@ -1973,7 +2040,7 @@ export function SettingsView({
                               step={0.05}
                               value={slot.volume}
                               onChange={(v) => {
-                                setDraft((p) => ({
+                                updateDebounced((p) => ({
                                   ...p,
                                   audio: {
                                     ...p.audio,
@@ -1991,7 +2058,7 @@ export function SettingsView({
                             <button
                               type="button"
                               onClick={() => {
-                                setDraft((p) => ({
+                                updateImmediate((p) => ({
                                   ...p,
                                   audio: {
                                     ...p.audio,
@@ -2018,7 +2085,7 @@ export function SettingsView({
                             <button
                               type="button"
                               onClick={() => {
-                                setDraft((p) => ({
+                                updateImmediate((p) => ({
                                   ...p,
                                   audio: {
                                     ...p.audio,
@@ -2044,7 +2111,7 @@ export function SettingsView({
                               type="button"
                               title={t.settings.appAudioRemove}
                               onClick={() => {
-                                setDraft((p) => ({
+                                updateImmediate((p) => ({
                                   ...p,
                                   audio: {
                                     ...p.audio,
@@ -2085,7 +2152,7 @@ export function SettingsView({
                   <ToggleSwitch
                     checked={draft.audio.mic_noise_suppression}
                     onChange={(en) => {
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         audio: { ...p.audio, mic_noise_suppression: en },
                       }));
@@ -2112,7 +2179,7 @@ export function SettingsView({
                       disabled={!draft.audio.mic_noise_suppression}
                       value={draft.audio.mic_noise_suppression_strength}
                       onChange={(val) => {
-                        setDraft((p) => ({
+                        updateDebounced((p) => ({
                           ...p,
                           audio: {
                             ...p.audio,
@@ -2148,7 +2215,7 @@ export function SettingsView({
                             draft.audio.mic_activation_mode.mode === "always_on"
                               ? 150
                               : draft.audio.mic_activation_mode.release_delay_ms;
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             audio: {
                               ...p.audio,
@@ -2184,7 +2251,7 @@ export function SettingsView({
                               const combo = keyEventToComboString(e);
                               if (!combo) return;
                               e.preventDefault();
-                              setDraft((p) => {
+                              updateImmediate((p) => {
                                 if (
                                   p.audio.mic_activation_mode.mode ===
                                   "always_on"
@@ -2204,7 +2271,7 @@ export function SettingsView({
                             }}
                             onChange={(e) => {
                               const v = e.target.value;
-                              setDraft((p) => {
+                              updateDebounced((p) => {
                                 if (
                                   p.audio.mic_activation_mode.mode ===
                                   "always_on"
@@ -2237,7 +2304,7 @@ export function SettingsView({
                               draft.audio.mic_activation_mode.release_delay_ms
                             }
                             onChange={(ms) => {
-                              setDraft((p) => {
+                              updateDebounced((p) => {
                                 if (
                                   p.audio.mic_activation_mode.mode ===
                                   "always_on"
@@ -2270,7 +2337,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.separate_tracks}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, separate_tracks: v },
                         }))
@@ -2281,7 +2348,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.apply_volumes_to_editor ?? true}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, apply_volumes_to_editor: v },
                         }))
@@ -2295,7 +2362,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.mic_soft_limiter}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, mic_soft_limiter: v },
                         }))
@@ -2309,7 +2376,7 @@ export function SettingsView({
                         checked={draft.audio.mic_noise_gate_db !== null}
                         onChange={(en) => {
                           const gate = en ? -50 : null;
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             audio: { ...p.audio, mic_noise_gate_db: gate },
                           }));
@@ -2334,7 +2401,7 @@ export function SettingsView({
                           step={1}
                           value={draft.audio.mic_noise_gate_db}
                           onChange={(g) => {
-                            setDraft((p) => ({
+                            updateDebounced((p) => ({
                               ...p,
                               audio: { ...p.audio, mic_noise_gate_db: g },
                             }));
@@ -2363,7 +2430,7 @@ export function SettingsView({
                   <ToggleSwitch
                     checked={draft.notifications.overlay_toast_enabled}
                     onChange={(v) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         notifications: {
                           ...p.notifications,
@@ -2379,7 +2446,7 @@ export function SettingsView({
                   <ToggleSwitch
                     checked={draft.notifications.sound_enabled}
                     onChange={(v) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         notifications: {
                           ...p.notifications,
@@ -2404,7 +2471,7 @@ export function SettingsView({
                     step={0.05}
                     value={draft.notifications.sound_volume}
                     onChange={(val) =>
-                      setDraft((p) => ({
+                      updateDebounced((p) => ({
                         ...p,
                         notifications: {
                           ...p.notifications,
@@ -2424,7 +2491,7 @@ export function SettingsView({
                     step={250}
                     value={draft.notifications.overlay_duration_ms}
                     onChange={(val) =>
-                      setDraft((p) => ({
+                      updateDebounced((p) => ({
                         ...p,
                         notifications: {
                           ...p.notifications,
@@ -2635,7 +2702,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.separate_tracks}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, separate_tracks: v },
                         }))
@@ -2646,7 +2713,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.apply_volumes_to_editor ?? true}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, apply_volumes_to_editor: v },
                         }))
@@ -2660,7 +2727,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.mic_soft_limiter}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, mic_soft_limiter: v },
                         }))
@@ -2674,7 +2741,7 @@ export function SettingsView({
                         checked={draft.audio.mic_noise_gate_db !== null}
                         onChange={(en) => {
                           const gate = en ? -50 : null;
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             audio: { ...p.audio, mic_noise_gate_db: gate },
                           }));
@@ -2699,7 +2766,7 @@ export function SettingsView({
                           step={1}
                           value={draft.audio.mic_noise_gate_db}
                           onChange={(g) => {
-                            setDraft((p) => ({
+                            updateDebounced((p) => ({
                               ...p,
                               audio: { ...p.audio, mic_noise_gate_db: g },
                             }));
@@ -2735,7 +2802,7 @@ export function SettingsView({
                         key={preset.id}
                         type="button"
                         onClick={() => {
-                          setDraft((p) => ({ ...p, theme: preset.id }));
+                          updateImmediate((p) => ({ ...p, theme: preset.id }));
                           onPreviewCustomTheme(null);
                           onPreviewTheme(preset.id);
                         }}
@@ -2817,7 +2884,7 @@ export function SettingsView({
                           const nextCustom = normalizeCustomColors(
                             draft.custom_theme
                           );
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             theme: "custom",
                             custom_theme: nextCustom,
@@ -2991,7 +3058,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.separate_tracks}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, separate_tracks: v },
                         }))
@@ -3002,7 +3069,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.apply_volumes_to_editor ?? true}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, apply_volumes_to_editor: v },
                         }))
@@ -3016,7 +3083,7 @@ export function SettingsView({
                     <ToggleSwitch
                       checked={draft.audio.mic_soft_limiter}
                       onChange={(v) =>
-                        setDraft((p) => ({
+                        updateImmediate((p) => ({
                           ...p,
                           audio: { ...p.audio, mic_soft_limiter: v },
                         }))
@@ -3030,7 +3097,7 @@ export function SettingsView({
                         checked={draft.audio.mic_noise_gate_db !== null}
                         onChange={(en) => {
                           const gate = en ? -50 : null;
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             audio: { ...p.audio, mic_noise_gate_db: gate },
                           }));
@@ -3055,7 +3122,7 @@ export function SettingsView({
                           step={1}
                           value={draft.audio.mic_noise_gate_db}
                           onChange={(g) => {
-                            setDraft((p) => ({
+                            updateDebounced((p) => ({
                               ...p,
                               audio: { ...p.audio, mic_noise_gate_db: g },
                             }));
@@ -3155,7 +3222,7 @@ export function SettingsView({
                 <ToggleSwitch
                   checked={draft.launch_at_startup}
                   onChange={(v) =>
-                    setDraft((p) => ({
+                    updateImmediate((p) => ({
                       ...p,
                       launch_at_startup: v,
                     }))
@@ -3184,7 +3251,7 @@ export function SettingsView({
                 <ToggleSwitch
                   checked={draft.check_updates_on_startup}
                   onChange={(v) =>
-                    setDraft((p) => ({
+                    updateImmediate((p) => ({
                       ...p,
                       check_updates_on_startup: v,
                     }))
@@ -3259,7 +3326,7 @@ export function SettingsView({
                     t.settings.hkSaveClip,
                     draft.hotkeys.save_clip,
                     (val) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         hotkeys: { ...p.hotkeys, save_clip: val },
                       }))
@@ -3269,7 +3336,7 @@ export function SettingsView({
                     t.settings.hkToggleSession,
                     draft.hotkeys.toggle_session,
                     (val) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         hotkeys: { ...p.hotkeys, toggle_session: val },
                       }))
@@ -3279,7 +3346,7 @@ export function SettingsView({
                     t.settings.hkAddBookmark,
                     draft.hotkeys.add_bookmark,
                     (val) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         hotkeys: { ...p.hotkeys, add_bookmark: val },
                       }))
@@ -3289,7 +3356,7 @@ export function SettingsView({
                     t.settings.hkMicMute,
                     draft.hotkeys.toggle_mic_mute,
                     (val) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         hotkeys: { ...p.hotkeys, toggle_mic_mute: val },
                       }))
@@ -3299,7 +3366,7 @@ export function SettingsView({
                     t.settings.hkPrivacy,
                     draft.hotkeys.toggle_privacy_mode,
                     (val) =>
-                      setDraft((p) => ({
+                      updateImmediate((p) => ({
                         ...p,
                         hotkeys: { ...p.hotkeys, toggle_privacy_mode: val },
                       }))
@@ -3392,7 +3459,7 @@ export function SettingsView({
                         key={modeId}
                         type="button"
                         onClick={() =>
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             storage: {
                               ...p.storage,
@@ -3436,7 +3503,7 @@ export function SettingsView({
                             key={mins}
                             type="button"
                             onClick={() =>
-                              setDraft((p) => ({
+                              updateImmediate((p) => ({
                                 ...p,
                                 storage: {
                                   ...p.storage,
@@ -3468,7 +3535,7 @@ export function SettingsView({
                               5,
                               Math.min(1440, Number(e.target.value) || 30)
                             );
-                            setDraft((p) => ({
+                            updateDebounced((p) => ({
                               ...p,
                               storage: {
                                 ...p.storage,
@@ -3493,7 +3560,7 @@ export function SettingsView({
                         step={50}
                         value={draft.storage.editor_cache.max_size_mb}
                         onChange={(val) =>
-                          setDraft((p) => ({
+                          updateDebounced((p) => ({
                             ...p,
                             storage: {
                               ...p.storage,
@@ -3511,7 +3578,7 @@ export function SettingsView({
                             key={mb}
                             type="button"
                             onClick={() =>
-                              setDraft((p) => ({
+                              updateImmediate((p) => ({
                                 ...p,
                                 storage: {
                                   ...p.storage,
@@ -3570,7 +3637,7 @@ export function SettingsView({
                         type="text"
                         value={draft.storage.output_dir}
                         onChange={(e) =>
-                          setDraft((p) => ({
+                          updateDebounced((p) => ({
                             ...p,
                             storage: {
                               ...p.storage,
@@ -3602,7 +3669,7 @@ export function SettingsView({
                         type="text"
                         value={draft.storage.temp_dir}
                         onChange={(e) =>
-                          setDraft((p) => ({
+                          updateDebounced((p) => ({
                             ...p,
                             storage: { ...p.storage, temp_dir: e.target.value },
                           }))
@@ -3622,7 +3689,7 @@ export function SettingsView({
                           const val = e.target.value
                             ? Math.max(1, Number(e.target.value))
                             : null;
-                          setDraft((p) => ({
+                          updateDebounced((p) => ({
                             ...p,
                             storage: { ...p.storage, max_storage_gb: val },
                           }));
@@ -3642,7 +3709,7 @@ export function SettingsView({
                           const val = e.target.value
                             ? Math.max(1, Number(e.target.value))
                             : null;
-                          setDraft((p) => ({
+                          updateDebounced((p) => ({
                             ...p,
                             storage: { ...p.storage, max_age_days: val },
                           }));
@@ -3657,7 +3724,7 @@ export function SettingsView({
                       <ToggleSwitch
                         checked={draft.storage.auto_remux_fmp4}
                         onChange={(v) =>
-                          setDraft((p) => ({
+                          updateImmediate((p) => ({
                             ...p,
                             storage: { ...p.storage, auto_remux_fmp4: v },
                           }))
