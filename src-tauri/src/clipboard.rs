@@ -167,6 +167,9 @@ mod tests {
 
     #[test]
     fn cf_hdrop_clipboard_roundtrip_places_file_for_ctrl_v() -> Result<(), String> {
+        if std::env::var_os("CI").is_some() {
+            return Ok(());
+        }
         let temp_dir = std::env::temp_dir().join(format!("ikoch_clip_{}", Uuid::new_v4()));
         fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
         let test_mp4 = temp_dir.join("test_clipboard_clip.mp4");

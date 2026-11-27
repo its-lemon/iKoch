@@ -353,10 +353,11 @@ fn parse_av1_seq_header_params(payload: &[u8]) -> Av1SeqHeaderParams {
                     return out;
                 }
             }
-            if initial_display_delay_present_flag == 1 && r.read_bit() == Some(1) {
-                if r.read_bits(4).is_none() {
-                    return out;
-                }
+            if initial_display_delay_present_flag == 1
+                && r.read_bit() == Some(1)
+                && r.read_bits(4).is_none()
+            {
+                return out;
             }
         }
     }
@@ -372,10 +373,8 @@ fn parse_av1_seq_header_params(payload: &[u8]) -> Av1SeqHeaderParams {
         return out;
     }
 
-    if reduced_still_picture_header == 0 {
-        if r.read_bit() == Some(1) && r.read_bits(7).is_none() {
-            return out;
-        }
+    if reduced_still_picture_header == 0 && r.read_bit() == Some(1) && r.read_bits(7).is_none() {
+        return out;
     }
     if r.read_bits(3).is_none() {
         return out;
@@ -393,10 +392,11 @@ fn parse_av1_seq_header_params(payload: &[u8]) -> Av1SeqHeaderParams {
         } else {
             r.read_bit().unwrap_or(0)
         };
-        if seq_force_screen_content_tools > 0 && r.read_bit() == Some(0) {
-            if r.read_bit().is_none() {
-                return out;
-            }
+        if seq_force_screen_content_tools > 0
+            && r.read_bit() == Some(0)
+            && r.read_bit().is_none()
+        {
+            return out;
         }
         if enable_order_hint == 1 && r.read_bits(3).is_none() {
             return out;
