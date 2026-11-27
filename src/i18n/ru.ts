@@ -319,6 +319,9 @@ export const ru = {
     codecH264: "H.264 / AVC (макс. совместимость Discord/браузеры)",
     codecHevc: "HEVC / H.265",
     codecAv1: "AV1 (аппаратный)",
+    codecAv1Unsupported: "AV1 (аппаратный — не поддерживается GPU)",
+    codecAv1UnavailableWarning:
+      "Ваша видеокарта не поддерживает аппаратное кодирование AV1 (нужна RTX 40xx / RX 7000 / Arc). Выберите H.264 или HEVC.",
     gpuEncoder: "Предпочтение GPU энкодера",
     gpuAuto: "Авто (выбор лучшего GPU MFT)",
     gpuNvenc: "NVIDIA NVENC",

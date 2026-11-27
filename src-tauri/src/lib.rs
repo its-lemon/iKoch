@@ -128,6 +128,7 @@ pub fn run() {
             commands::get_editor_cache_stats,
             commands::clear_editor_cache_now,
             commands::pick_audio_file,
+            commands::get_supported_codecs,
             commands::check_for_updates,
             commands::download_and_install_update,
         ])

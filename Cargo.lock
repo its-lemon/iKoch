@@ -2017,6 +2017,7 @@ dependencies = [
  "chrono",
  "core-audio",
  "core-capture",
+ "core-encode",
  "core-types",
  "crossbeam-channel",
  "parking_lot",

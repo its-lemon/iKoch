@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 core-types.workspace = true
 core-capture.workspace = true
 core-audio.workspace = true
+core-encode.workspace = true
 recorder-daemon.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

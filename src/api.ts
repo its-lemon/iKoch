@@ -17,6 +17,7 @@ import type {
   SoundNotificationKind,
   TrimRequest,
   UpdateInfo,
+  VideoCodec,
   WindowInfo,
 } from "./types";
 
@@ -133,6 +134,8 @@ export const api = {
     invoke<[number, number]>("clear_editor_cache_now"),
 
   pickAudioFile: () => invoke<string | null>("pick_audio_file"),
+
+  getSupportedCodecs: () => invoke<VideoCodec[]>("get_supported_codecs"),
 
   checkForUpdates: () => invoke<UpdateInfo>("check_for_updates"),
 

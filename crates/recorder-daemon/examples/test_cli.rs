@@ -456,7 +456,7 @@ fn inspect_mp4_file(path: &Path) -> Result<Mp4Inspection, String> {
     let moov_slice = &buf[moov_pos..mdat_pos];
     let video_tracks = moov_slice
         .windows(4)
-        .filter(|w| *w == b"avc1" || *w == b"hvc1")
+        .filter(|w| *w == b"avc1" || *w == b"hvc1" || *w == b"av01")
         .count();
     let audio_tracks = moov_slice.windows(4).filter(|w| *w == b"mp4a").count();
     let tkhd_flags: Vec<u32> = moov_slice

@@ -2,7 +2,8 @@
 //! `IMFDXGIDeviceManager`) using zero-copy NV12 `ID3D11Texture2D` input samples.
 
 use crate::bitstream::{
-    build_video_stream_header, parse_annex_b_access_unit, split_annex_b_nalus,
+    build_video_stream_header, parse_annex_b_access_unit, parse_av1_access_unit,
+    split_annex_b_nalus, split_av1_obus,
 };
 use core_capture::GpuTextureFrame;
 use core_types::{
@@ -40,11 +41,80 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
     MF_MT_MAX_KEYFRAME_SPACING, MF_MT_MPEG2_PROFILE, MF_MT_MPEG_SEQUENCE_HEADER,
     MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK,
-    MF_VERSION, MFSTARTUP_NOSOCKET,
+    MF_VERSION, MFSTARTUP_NOSOCKET, MFSampleExtension_CleanPoint,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 use windows::Win32::System::Variant::{VARIANT, VARIANT_0, VARIANT_0_0, VARIANT_0_0_0, VT_BOOL, VT_UI4};
 
+const MFVIDEOFORMAT_AV1: GUID = GUID::from_u128(0x31305641_0000_0010_8000_00AA00389B71);
+
+fn codec_subtype_guid(codec: VideoCodec) -> GUID {
+    match codec {
+        VideoCodec::H264 => MFVideoFormat_H264,
+        VideoCodec::Hevc => MFVideoFormat_HEVC,
+        VideoCodec::Av1 => MFVIDEOFORMAT_AV1,
+    }
+}
+
+/// Probes Windows Media Foundation for available hardware video encoders (`H.264`, `HEVC`, `AV1`).
+#[must_use]
+pub fn detect_available_hardware_codecs() -> Vec<VideoCodec> {
+    let com_hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    if com_hr.is_err() && com_hr != RPC_E_CHANGED_MODE {
+        warn!("CoInitializeEx warning during codec probe: {com_hr:?}");
+    }
+    if unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET) }.is_err() {
+        return vec![VideoCodec::H264, VideoCodec::Hevc];
+    }
+
+    struct MfShutdownGuard;
+    impl Drop for MfShutdownGuard {
+        fn drop(&mut self) {
+            let _ = unsafe { MFShutdown() };
+        }
+    }
+    let _guard = MfShutdownGuard;
+
+    let input_info = MFT_REGISTER_TYPE_INFO {
+        guidMajorType: MFMediaType_Video,
+        guidSubtype: MFVideoFormat_NV12,
+    };
+    let flags = MFT_ENUM_FLAG(MFT_ENUM_FLAG_HARDWARE.0 | MFT_ENUM_FLAG_SORTANDFILTER.0);
+
+    let mut supported = Vec::new();
+    for codec in [VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Av1] {
+        let output_info = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: codec_subtype_guid(codec),
+        };
+        let mut activates_ptr: *mut Option<IMFActivate> = std::ptr::null_mut();
+        let mut count: u32 = 0;
+        let ok = unsafe {
+            MFTEnumEx(
+                MFT_CATEGORY_VIDEO_ENCODER,
+                flags,
+                Some(&input_info),
+                Some(&output_info),
+                &mut activates_ptr,
+                &mut count,
+            )
+        }
+        .is_ok();
+        if !activates_ptr.is_null() {
+            unsafe {
+                let slice = std::slice::from_raw_parts_mut(activates_ptr, count as usize);
+                for item in slice {
+                    drop(item.take());
+                }
+                CoTaskMemFree(Some(activates_ptr.cast()));
+            }
+        }
+        if ok && count > 0 {
+            supported.push(codec);
+        }
+    }
+    supported
+}
 /// Configuration for creating or reconfiguring [`MfHardwareEncoder`].
 #[derive(Debug, Clone)]
 pub struct MfVideoEncoderConfig {
@@ -514,7 +584,14 @@ impl MfHardwareEncoder {
             return Ok(());
         }
 
-        let parsed = parse_annex_b_access_unit(self.config.codec, &annex_b_bytes);
+        let sample_clean_point =
+            unsafe { sample.GetUINT32(&MFSampleExtension_CleanPoint) }.unwrap_or(0) != 0;
+        let parsed = match self.config.codec {
+            VideoCodec::Av1 => parse_av1_access_unit(&annex_b_bytes, sample_clean_point),
+            VideoCodec::H264 | VideoCodec::Hevc => {
+                parse_annex_b_access_unit(self.config.codec, &annex_b_bytes)
+            }
+        };
         if let Some(vps) = parsed.vps {
             self.cached_vps = Some(vps);
         }
@@ -532,16 +609,37 @@ impl MfHardwareEncoder {
         }
 
         if !self.header_emitted {
-            if let (Some(sps), Some(pps)) = (self.cached_sps.clone(), self.cached_pps.clone()) {
-                let header = build_video_stream_header(
-                    self.config.codec,
-                    self.config.width,
-                    self.config.height,
-                    self.config.fps,
-                    self.cached_vps.clone(),
-                    sps,
-                    pps,
-                );
+            let ready_header = match self.config.codec {
+                VideoCodec::Av1 => self.cached_sps.clone().map(|seq_hdr| {
+                    build_video_stream_header(
+                        VideoCodec::Av1,
+                        self.config.width,
+                        self.config.height,
+                        self.config.fps,
+                        None,
+                        seq_hdr,
+                        Vec::new(),
+                    )
+                }),
+                VideoCodec::H264 | VideoCodec::Hevc => {
+                    if let (Some(sps), Some(pps)) =
+                        (self.cached_sps.clone(), self.cached_pps.clone())
+                    {
+                        Some(build_video_stream_header(
+                            self.config.codec,
+                            self.config.width,
+                            self.config.height,
+                            self.config.fps,
+                            self.cached_vps.clone(),
+                            sps,
+                            pps,
+                        ))
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(header) = ready_header {
                 outputs.push(EncoderOutput::StreamHeader(header));
                 self.header_emitted = true;
             }
@@ -582,23 +680,32 @@ impl MfHardwareEncoder {
         }
         if !ptr.is_null() && len > 0 {
             let blob = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
-            for nalu in split_annex_b_nalus(blob) {
-                if nalu.is_empty() {
-                    continue;
+            if self.config.codec == VideoCodec::Av1 {
+                for obu in split_av1_obus(blob) {
+                    if obu.obu_type == 1 {
+                        self.cached_sps = Some(obu.raw.to_vec());
+                        break;
+                    }
                 }
-                match self.config.codec {
-                    VideoCodec::H264 => match nalu[0] & 0x1F {
-                        7 => self.cached_sps = Some(nalu.to_vec()),
-                        8 => self.cached_pps = Some(nalu.to_vec()),
-                        _ => {}
-                    },
-                    VideoCodec::Hevc => match (nalu[0] >> 1) & 0x3F {
-                        32 => self.cached_vps = Some(nalu.to_vec()),
-                        33 => self.cached_sps = Some(nalu.to_vec()),
-                        34 => self.cached_pps = Some(nalu.to_vec()),
-                        _ => {}
-                    },
-                    VideoCodec::Av1 => {}
+            } else {
+                for nalu in split_annex_b_nalus(blob) {
+                    if nalu.is_empty() {
+                        continue;
+                    }
+                    match self.config.codec {
+                        VideoCodec::H264 => match nalu[0] & 0x1F {
+                            7 => self.cached_sps = Some(nalu.to_vec()),
+                            8 => self.cached_pps = Some(nalu.to_vec()),
+                            _ => {}
+                        },
+                        VideoCodec::Hevc => match (nalu[0] >> 1) & 0x3F {
+                            32 => self.cached_vps = Some(nalu.to_vec()),
+                            33 => self.cached_sps = Some(nalu.to_vec()),
+                            34 => self.cached_pps = Some(nalu.to_vec()),
+                            _ => {}
+                        },
+                        VideoCodec::Av1 => {}
+                    }
                 }
             }
         }
@@ -620,15 +727,7 @@ fn activate_encoder_mft(
     codec: VideoCodec,
     vendor: GpuVendorPreference,
 ) -> Result<(IMFTransform, String), EncodeError> {
-    let out_subtype = match codec {
-        VideoCodec::H264 => MFVideoFormat_H264,
-        VideoCodec::Hevc => MFVideoFormat_HEVC,
-        VideoCodec::Av1 => {
-            return Err(EncodeError::HardwareEncoderUnavailable {
-                codec: "AV1 (GPU encoder support scheduled for Stage 5-6)".to_string(),
-            })
-        }
-    };
+    let out_subtype = codec_subtype_guid(codec);
 
     let input_info = MFT_REGISTER_TYPE_INFO {
         guidMajorType: MFMediaType_Video,
@@ -766,15 +865,7 @@ fn build_output_media_type(
 ) -> Result<windows::Win32::Media::MediaFoundation::IMFMediaType, EncodeError> {
     let mt = unsafe { MFCreateMediaType() }
         .map_err(|err| EncodeError::InvalidMediaType(format!("MFCreateMediaType failed: {err}")))?;
-    let subtype = match config.codec {
-        VideoCodec::H264 => MFVideoFormat_H264,
-        VideoCodec::Hevc => MFVideoFormat_HEVC,
-        VideoCodec::Av1 => {
-            return Err(EncodeError::HardwareEncoderUnavailable {
-                codec: "AV1 (GPU encoder support scheduled for Stage 5-6)".to_string(),
-            })
-        }
-    };
+    let subtype = codec_subtype_guid(config.codec);
 
     unsafe {
         mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
@@ -802,7 +893,8 @@ fn build_output_media_type(
 
         let profile = match config.codec {
             VideoCodec::H264 => eAVEncH264VProfile_High.0 as u32,
-            VideoCodec::Hevc | VideoCodec::Av1 => 1u32, // Main profile
+            VideoCodec::Hevc => 1u32, // Main profile
+            VideoCodec::Av1 => 0u32,  // Main profile
         };
         if let Err(err) = mt.SetUINT32(&MF_MT_MPEG2_PROFILE, profile) {
             warn!("SetUINT32(MF_MT_MPEG2_PROFILE={profile}) failed: {err}");

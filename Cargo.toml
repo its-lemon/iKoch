@@ -88,7 +88,6 @@ rodio = { version = "0.23", default-features = false, features = ["playback", "w
 
 # Daemon utilities
 global-hotkey = "0.10"
-sysinfo = "0.40"
 
 # Desktop shell & Tray (Tauri v2)
 tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }

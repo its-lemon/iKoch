@@ -895,6 +895,15 @@ fn write_stbl_box(
                         write_box(entry, cfg_fourcc, |cfg| {
                             cfg.extend_from_slice(&headers.video.avcc_or_hvcc);
                         });
+                        if headers.video.codec == VideoCodec::Av1 {
+                            write_box(entry, b"colr", |colr| {
+                                colr.extend_from_slice(b"nclx");
+                                colr.extend_from_slice(&1u16.to_be_bytes()); // BT.709 primaries
+                                colr.extend_from_slice(&1u16.to_be_bytes()); // BT.709 transfer
+                                colr.extend_from_slice(&1u16.to_be_bytes()); // BT.709 matrix
+                                colr.push(0x00); // limited range
+                            });
+                        }
                     });
                 }
                 TrackKind::AudioMixed

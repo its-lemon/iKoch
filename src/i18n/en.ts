@@ -308,6 +308,9 @@ export const en: Translations = {
     codecH264: "H.264 / AVC (Best Discord/Browser compatibility)",
     codecHevc: "HEVC / H.265",
     codecAv1: "AV1 (Hardware)",
+    codecAv1Unsupported: "AV1 (Hardware — Not supported on GPU)",
+    codecAv1UnavailableWarning:
+      "Your GPU does not expose a hardware AV1 encoder (requires RTX 40xx / RX 7000 / Arc). Please select H.264 or HEVC.",
     gpuEncoder: "GPU Encoder Preference",
     gpuAuto: "Auto (Best hardware MFT)",
     gpuNvenc: "NVIDIA NVENC",

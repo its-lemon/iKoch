@@ -409,6 +409,13 @@ if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 }
 
 #[tauri::command]
+pub async fn get_supported_codecs() -> Result<Vec<core_types::VideoCodec>, String> {
+    tauri::async_runtime::spawn_blocking(core_encode::detect_available_hardware_codecs)
+        .await
+        .map_err(|e| format!("Join error: {e}"))
+}
+
+#[tauri::command]
 pub async fn check_for_updates() -> Result<crate::updater::UpdateInfo, String> {
     tauri::async_runtime::spawn_blocking(|| {
         crate::updater::check_for_updates(env!("CARGO_PKG_VERSION"))

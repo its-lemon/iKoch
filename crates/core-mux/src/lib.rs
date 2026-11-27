@@ -135,6 +135,61 @@ mod tests {
     }
 
     #[test]
+    fn av1_faststart_and_fmp4_mux_writes_av01_av1c_and_colr() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = std::env::temp_dir().join(format!("ikoch_av1_mux_{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir)?;
+
+        let seq_hdr = vec![0x0A, 0x03, 0x0A, 0x00, 0x00];
+        let mut av1c = vec![0x81, 0x08, 0x0C, 0x00];
+        av1c.extend_from_slice(&seq_hdr);
+
+        let headers = StreamHeaders {
+            video: VideoStreamHeader {
+                codec: VideoCodec::Av1,
+                width: 1920,
+                height: 1080,
+                fps_num: 60,
+                fps_den: 1,
+                sps: seq_hdr,
+                pps: Vec::new(),
+                vps: None,
+                avcc_or_hvcc: av1c,
+            },
+            audio_mixed: None,
+            audio_game: None,
+            audio_mic: None,
+            audio_secondary: None,
+            app_audio: Vec::new(),
+        };
+
+        let packets = vec![
+            dummy_video_pkt(1, 0, true, 64),
+            dummy_video_pkt(2, 16_666, false, 32),
+        ];
+
+        let faststart_path = temp_dir.join("av1_faststart.mp4");
+        write_faststart_mp4(&faststart_path, &headers, &packets)?;
+        let bytes = fs::read(&faststart_path)?;
+        assert!(bytes.windows(4).any(|w| w == b"av01"));
+        assert!(bytes.windows(4).any(|w| w == b"av1C"));
+        assert!(bytes.windows(4).any(|w| w == b"colr"));
+
+        let session_path = temp_dir.join("av1_session.mp4");
+        let mut fmp4 = Fmp4DiskWriter::create(&session_path, headers)?;
+        for pkt in packets {
+            fmp4.push_packet(pkt)?;
+        }
+        fmp4.finalize(true)?;
+        let remuxed = fs::read(&session_path)?;
+        assert!(remuxed.windows(4).any(|w| w == b"av01"));
+        assert!(remuxed.windows(4).any(|w| w == b"av1C"));
+        assert!(remuxed.windows(4).any(|w| w == b"colr"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        Ok(())
+    }
+
+    #[test]
     fn multi_track_audio_and_video_muxing_sets_mixed_default_and_clean_stems() -> Result<(), Box<dyn std::error::Error>> {
         let temp_dir = std::env::temp_dir().join(format!("rustclip_multi_audio_{}", Uuid::new_v4()));
         fs::create_dir_all(&temp_dir)?;

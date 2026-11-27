@@ -2326,4 +2326,150 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    #[ignore = "Requires hardware AV1 GPU encoder (RTX 40xx / RX 7000 / Arc)"]
+    fn live_rtx_av1_hardware_encode_and_mux_mp4() -> Result<(), Box<dyn std::error::Error>> {
+        use core_capture::{D3d11SharedContext, GpuVideoProcessor};
+        use core_mux::write_faststart_mp4;
+        use core_types::{GpuVendorPreference, RateControlMode, StreamHeaders, VideoCodec};
+        use std::process::Command;
+        use windows::Win32::Graphics::Direct3D11::{
+            ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+            D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+
+        let supported = core_encode::detect_available_hardware_codecs();
+        println!("Detected hardware codecs: {supported:?}");
+        assert!(
+            supported.contains(&VideoCodec::Av1),
+            "Hardware AV1 encoder not detected on this GPU: {supported:?}"
+        );
+
+        let width = 1280u32;
+        let height = 720u32;
+        let fps = 60u32;
+        let frame_count = 90usize; // 1.5s @ 60fps
+
+        let shared = D3d11SharedContext::new()?;
+        let mut processor = GpuVideoProcessor::new(&shared)?;
+        let mut video_enc = MfHardwareEncoder::new(
+            &shared.device,
+            MfVideoEncoderConfig {
+                codec: VideoCodec::Av1,
+                vendor: GpuVendorPreference::Auto,
+                rate_control: RateControlMode::Vbr,
+                width,
+                height,
+                fps,
+                bitrate_kbps: 6_000,
+                gop_seconds: 2,
+            },
+        )?;
+        println!("Activated AV1 encoder: {}", video_enc.friendly_name());
+
+        let tex_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_SHADER_RESOURCE.0 | D3D11_BIND_RENDER_TARGET.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut tex_opt: Option<ID3D11Texture2D> = None;
+        unsafe {
+            shared
+                .device
+                .CreateTexture2D(&tex_desc, None, Some(&mut tex_opt))?;
+        }
+        let bgra_tex = tex_opt.ok_or("CreateTexture2D(BGRA) returned null")?;
+        let mut pixel_words = vec![0xFF20_4080u32; (width * height) as usize];
+
+        let mut video_header: Option<VideoStreamHeader> = None;
+        let mut packets: Vec<MediaPacket> = Vec::new();
+        for frame_idx in 0..frame_count {
+            let color = 0xFF00_0000
+                | (((frame_idx as u32 * 7) & 0xFF) << 16)
+                | (((frame_idx as u32 * 3) & 0xFF) << 8)
+                | 0x80;
+            pixel_words[..width as usize * 8].fill(color);
+            unsafe {
+                shared.context.UpdateSubresource(
+                    &bgra_tex,
+                    0,
+                    None,
+                    pixel_words.as_ptr().cast(),
+                    width * 4,
+                    0,
+                );
+            }
+            let pts_us = (frame_idx as i64) * 1_000_000 / i64::from(fps);
+            let nv12 = processor.convert_to_nv12(
+                &bgra_tex,
+                width,
+                height,
+                fps,
+                pts_us,
+                (frame_idx + 1) as u64,
+                1,
+            )?;
+            for out in video_enc.encode_gpu_frame(&nv12)? {
+                match out {
+                    EncoderOutput::StreamHeader(h) => video_header = Some(h),
+                    EncoderOutput::Packet(p) => packets.push(p),
+                }
+            }
+        }
+        for out in video_enc.flush()? {
+            match out {
+                EncoderOutput::StreamHeader(h) => video_header = Some(h),
+                EncoderOutput::Packet(p) => packets.push(p),
+            }
+        }
+
+        let header = video_header.ok_or("AV1 encoder did not emit VideoStreamHeader")?;
+        assert_eq!(header.codec, VideoCodec::Av1);
+        assert!(!header.avcc_or_hvcc.is_empty(), "av1C must be populated");
+        assert!(!packets.is_empty(), "AV1 encoder emitted 0 packets");
+
+        let headers = StreamHeaders {
+            video: header,
+            audio_mixed: None,
+            audio_game: None,
+            audio_mic: None,
+            audio_secondary: None,
+            app_audio: Vec::new(),
+        };
+        let tmp_mp4 = std::env::temp_dir().join(format!("ikoch_av1_live_{}.mp4", Uuid::new_v4()));
+        let file_size = write_faststart_mp4(&tmp_mp4, &headers, &packets)?;
+        println!("Muxed AV1 MP4: {} ({} bytes, {} packets)", tmp_mp4.display(), file_size, packets.len());
+
+        let ffprobe_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe");
+        let probe_out = Command::new(&ffprobe_path)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration,size",
+                "-show_entries",
+                "stream=codec_name,width,height,nb_frames",
+                "-of",
+                "default=noprint_wrappers=1",
+            ])
+            .arg(&tmp_mp4)
+            .output()?;
+        let stdout = String::from_utf8_lossy(&probe_out.stdout);
+        println!("--- AV1 ffprobe output ---\n{stdout}");
+        let _ = fs::remove_file(&tmp_mp4);
+
+        assert!(probe_out.status.success(), "ffprobe failed: {}", String::from_utf8_lossy(&probe_out.stderr));
+        assert!(stdout.contains("codec_name=av1"), "Expected codec_name=av1, got:\n{stdout}");
+        Ok(())
+    }
 }

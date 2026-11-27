@@ -485,10 +485,23 @@ export function SettingsView({
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
+  const [supportedCodecs, setSupportedCodecs] = useState<VideoCodec[]>([
+    "h264",
+    "hevc",
+    "av1",
+  ]);
 
   useEffect(() => {
     getVersion()
       .then((v) => setAppVersion(v))
+      .catch(() => {});
+    api
+      .getSupportedCodecs()
+      .then((codecs) => {
+        if (Array.isArray(codecs) && codecs.length > 0) {
+          setSupportedCodecs(codecs);
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -723,10 +736,14 @@ export function SettingsView({
     label: `${fps} FPS`,
   }));
 
+  const av1Supported = supportedCodecs.includes("av1");
   const codecOptions: SelectOption[] = [
     { value: "h264", label: t.settings.codecH264 },
     { value: "hevc", label: t.settings.codecHevc },
-    { value: "av1", label: t.settings.codecAv1 },
+    {
+      value: "av1",
+      label: av1Supported ? t.settings.codecAv1 : t.settings.codecAv1Unsupported,
+    },
   ];
 
   const gpuOptions: SelectOption[] = [
@@ -1131,6 +1148,11 @@ export function SettingsView({
                       }
                       ariaLabel={t.settings.videoCodec}
                     />
+                    {draft.video.codec === "av1" && !av1Supported && (
+                      <p className="mt-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-300">
+                        {t.settings.codecAv1UnavailableWarning}
+                      </p>
+                    )}
                   </div>
 
                   <div>
