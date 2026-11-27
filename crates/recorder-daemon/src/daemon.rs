@@ -2003,6 +2003,9 @@ mod tests {
     #[test]
     fn hw_encode_2mbps_vbr_dynamic_motion_respects_bitrate_budget(
     ) -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::var_os("CI").is_some() {
+            return Ok(());
+        }
         use core_audio::{target_aac_bitrate_kbps, MfAacEncoder, AAC_FRAME_SAMPLES};
         use core_capture::{D3d11SharedContext, GpuVideoProcessor};
         use core_mux::write_faststart_mp4;

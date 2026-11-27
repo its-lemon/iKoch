@@ -739,6 +739,11 @@ mod tests {
     ) -> ClipMetadata {
         let mp4_path = dir.join(format!("{name}.mp4"));
         fs::write(&mp4_path, vec![0xAA; size]).unwrap_or(());
+        if let Ok(file) = fs::File::options().write(true).open(&mp4_path) {
+            let mtime = std::time::SystemTime::now()
+                - std::time::Duration::from_secs(u64::try_from(age_days.max(0)).unwrap_or(0) * 86_400);
+            let _ = file.set_modified(mtime);
+        }
         let meta = ClipMetadata {
             id: Uuid::new_v4(),
             title: name.to_string(),
