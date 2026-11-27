@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "core-audio"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "core-types",
  "crossbeam-channel",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "core-capture"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "core-types",
  "crossbeam-channel",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "core-encode"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "core-capture",
  "core-types",
@@ -680,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "core-mux"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "core-audio",
  "core-types",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "core-types"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "chrono",
  "serde",
@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "ikoch"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3278,7 +3278,7 @@ dependencies = [
 
 [[package]]
 name = "recorder-daemon"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "chrono",
  "core-audio",

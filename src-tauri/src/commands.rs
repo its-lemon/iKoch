@@ -147,44 +147,77 @@ pub fn play_test_sound(
 }
 
 #[tauri::command]
-pub fn list_clips(
+pub async fn list_clips(
     state: State<'_, AppState>,
     filter: Option<GalleryFilter>,
-) -> Vec<ClipMetadata> {
+) -> Result<Vec<ClipMetadata>, String> {
     let dir = state.current_settings().storage.output_dir;
-    let items = list_clip_metadata(&dir);
-    let Some(f) = filter else {
-        return items;
-    };
-    items
-        .into_iter()
-        .filter(|m| {
-            if let Some(kind) = f.kind {
-                if m.kind != kind {
-                    return false;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut items = list_clip_metadata(&dir);
+        for meta in &mut items {
+            if meta.duration_sec <= 0.0 || meta.width == 0 || meta.height == 0 {
+                if let Ok(probed) = crate::ffmpeg_editor::probe_media_streams(&meta.file_path) {
+                    meta.duration_sec = probed.duration_sec;
+                    meta.width = probed.width;
+                    meta.height = probed.height;
+                    meta.video_codec = match probed.video_codec.to_ascii_lowercase().as_str() {
+                        "hevc" | "h265" => core_types::VideoCodec::Hevc,
+                        "av1" => core_types::VideoCodec::Av1,
+                        _ => core_types::VideoCodec::H264,
+                    };
+                    meta.audio_tracks = probed
+                        .audio_streams
+                        .into_iter()
+                        .map(|s| core_types::AudioTrackMetadata {
+                            track_index: u8::try_from(s.ordinal + 1).unwrap_or(u8::MAX),
+                            kind: s.track_kind,
+                            label: s.label,
+                            codec: s.codec_name,
+                            sample_rate: s.sample_rate,
+                            channels: s.channels,
+                            default_volume: 1.0,
+                            cached_audio_path: None,
+                        })
+                        .collect();
+                    let _ = save_clip_metadata(meta);
                 }
             }
-            if f.favorites_only && !m.favorite {
-                return false;
-            }
-            if let Some(g) = &f.game_name {
-                if !m.game_name.to_ascii_lowercase().contains(&g.to_ascii_lowercase()) {
-                    return false;
-                }
-            }
-            if let Some(q) = &f.search_query {
-                let ql = q.trim().to_ascii_lowercase();
-                if !ql.is_empty() {
-                    let hay = format!("{} {} {}", m.title, m.game_name, m.tags.join(" "))
-                        .to_ascii_lowercase();
-                    if !hay.contains(&ql) {
+        }
+        let Some(f) = filter else {
+            return items;
+        };
+        items
+            .into_iter()
+            .filter(|m| {
+                if let Some(kind) = f.kind {
+                    if m.kind != kind {
                         return false;
                     }
                 }
-            }
-            true
-        })
-        .collect()
+                if f.favorites_only && !m.favorite {
+                    return false;
+                }
+                if let Some(g) = &f.game_name {
+                    if !m.game_name.to_ascii_lowercase().contains(&g.to_ascii_lowercase()) {
+                        return false;
+                    }
+                }
+                if let Some(q) = &f.search_query {
+                    let ql = q.trim().to_ascii_lowercase();
+                    if !ql.is_empty() {
+                        let hay = format!("{} {} {}", m.title, m.game_name, m.tags.join(" "))
+                            .to_ascii_lowercase();
+                        if !hay.contains(&ql) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("Join error: {e}"))
 }
 
 #[tauri::command]

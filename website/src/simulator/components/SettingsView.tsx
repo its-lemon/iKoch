@@ -1,9 +1,10 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   Bell,
   Check,
   CheckCircle2,
+  ChevronDown,
   Database,
   Download,
   FolderOpen,
@@ -17,7 +18,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
-  Save,
+  Sliders,
   Trash2,
   Volume2,
   VolumeX,
@@ -140,6 +141,85 @@ function ToggleSwitch({
   );
 }
 
+function SegmentedControl<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: { value: T; label: string; warn?: boolean; title?: string }[];
+  onChange: (next: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1 rounded-xl bg-black/35 p-1">
+      {options.map((opt) => {
+        const active = opt.value === value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            title={opt.title}
+            onClick={() => onChange(opt.value)}
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+              active
+                ? "bg-[var(--accent)] text-white shadow-sm"
+                : opt.warn
+                  ? "text-amber-300/80 hover:bg-white/[0.06] hover:text-amber-200"
+                  : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-100"
+            }`}
+          >
+            {opt.warn && (
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+            )}
+            <span>{opt.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AdvancedAccordion({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="overflow-hidden rounded-xl bg-white/[0.02] ring-1 ring-white/[0.05]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition hover:bg-white/[0.03]"
+      >
+        <div className="flex min-w-0 items-center gap-2.5">
+          <Sliders className="h-3.5 w-3.5 shrink-0 text-[var(--accent-hover)]" />
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-slate-200">{title}</div>
+            {hint && !open && (
+              <div className="truncate text-[11px] text-slate-500">{hint}</div>
+            )}
+          </div>
+        </div>
+        <ChevronDown
+          className={`h-4 w-4 shrink-0 text-slate-400 transition-transform duration-200 ${
+            open ? "rotate-180 text-white" : ""
+          }`}
+        />
+      </button>
+      {open && (
+        <div className="space-y-4 border-t border-white/[0.05] px-4 py-4">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function keyEventToComboString(e: React.KeyboardEvent): string | null {
   const ignored = ["Control", "Shift", "Alt", "Meta", "OS"];
   if (ignored.includes(e.key)) return null;
@@ -254,6 +334,8 @@ export function SettingsView({
   );
   const prevSettingsRef = useRef<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const autoSaveTimerRef = useRef<number | null>(null);
 
   const [outDevices, setOutDevices] = useState<AudioDeviceInfo[]>([]);
   const [inDevices, setInDevices] = useState<AudioDeviceInfo[]>([]);
@@ -392,10 +474,6 @@ export function SettingsView({
     }
   };
 
-  const hasUnsavedChanges = useMemo(() => {
-    return JSON.stringify(draft) !== JSON.stringify(settings);
-  }, [draft, settings]);
-
   const loadAudioDevices = useCallback(async () => {
     try {
       const [outs, ins] = await Promise.all([
@@ -413,18 +491,37 @@ export function SettingsView({
     void loadAudioDevices();
   }, [loadAudioDevices]);
 
-  const commitSave = async (customDraft?: AppSettings) => {
-    const next = customDraft ?? draft;
-    setSaving(true);
-    try {
-      await onSaveSettings(next);
-      onNotify(t.settings.savedTitle, t.settings.savedMsg, "success");
-    } catch (err) {
-      onNotify(t.settings.saveErrorTitle, String(err), "error");
-    } finally {
-      setSaving(false);
+  // Auto-save settings on the fly whenever `draft` diverges from `settings`.
+  useEffect(() => {
+    if (JSON.stringify(draft) === JSON.stringify(settings)) {
+      return;
     }
-  };
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      setSaving(true);
+      void onSaveSettings(draft)
+        .then(() => {
+          setJustSaved(true);
+          window.setTimeout(() => setJustSaved(false), 2200);
+        })
+        .catch((err) => {
+          onNotify(t.settings.saveErrorTitle, String(err), "error");
+        })
+        .finally(() => {
+          setSaving(false);
+        });
+    }, 280);
+
+    return () => {
+      if (autoSaveTimerRef.current !== null) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [draft, onNotify, onSaveSettings, settings, t.settings.saveErrorTitle]);
 
   const handleSelectLanguage = (nextLang: AppLanguage) => {
     setDraft((p) => ({ ...p, language: nextLang }));
@@ -483,6 +580,22 @@ export function SettingsView({
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [supportedCodecs, setSupportedCodecs] = useState<VideoCodec[]>([
+    "h264",
+    "hevc",
+    "av1",
+  ]);
+
+  useEffect(() => {
+    api
+      .getSupportedCodecs()
+      .then((codecs) => {
+        if (Array.isArray(codecs) && codecs.length > 0) {
+          setSupportedCodecs(codecs);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleCheckUpdates = async () => {
     setCheckingUpdates(true);
@@ -687,7 +800,7 @@ export function SettingsView({
     "mt-1.5 w-full rounded-xl bg-black/35 px-3 py-2 text-xs text-white ring-1 ring-white/[0.08] outline-none transition focus:ring-[var(--accent)]";
   const labelTitleCls = "mb-1.5 text-xs font-medium text-slate-300";
   const sectionCls =
-    "space-y-4 rounded-2xl bg-[var(--bg-panel,rgba(255,255,255,0.025))] p-5 ring-1 ring-[var(--border-subtle,rgba(255,255,255,0.06))]";
+    "space-y-5 rounded-2xl bg-[var(--bg-panel,rgba(255,255,255,0.025))] p-6 ring-1 ring-white/[0.05]";
   const actionChipBtn =
     "inline-flex items-center gap-1.5 rounded-xl bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-slate-200 transition hover:bg-white/[0.12] hover:text-white";
 
@@ -703,23 +816,7 @@ export function SettingsView({
     { value: "preserve_hdr10", label: t.settings.hdrPreserve },
   ];
 
-  const resolutionOptions: SelectOption[] = [
-    { value: "native", label: t.settings.resNative },
-    { value: "p1080", label: t.settings.res1080 },
-    { value: "p720", label: t.settings.res720 },
-    { value: "custom", label: t.settings.resCustom },
-  ];
-
-  const fpsOptions: SelectOption[] = [30, 60, 120, 144, 240].map((fps) => ({
-    value: String(fps),
-    label: `${fps} FPS`,
-  }));
-
-  const codecOptions: SelectOption[] = [
-    { value: "h264", label: t.settings.codecH264 },
-    { value: "hevc", label: t.settings.codecHevc },
-    { value: "av1", label: t.settings.codecAv1 },
-  ];
+  const av1Supported = supportedCodecs.includes("av1");
 
   const gpuOptions: SelectOption[] = [
     { value: "auto", label: t.settings.gpuAuto },
@@ -828,8 +925,8 @@ export function SettingsView({
     }
   };
 
-  const msUnit = lang === "en" ? "ms" : "РјСЃ";
-  const minShortUnit = lang === "en" ? "m" : "Рј";
+  const msUnit = lang === "en" ? "ms" : "мс";
+  const minShortUnit = lang === "en" ? "m" : "м";
   const customPreviewColors = normalizeCustomColors(draft.custom_theme);
   const currentUi: UiSettings = draft.ui ?? DEFAULT_UI_SETTINGS;
 
@@ -854,7 +951,7 @@ export function SettingsView({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-[var(--bg-app)]">
-      {/* Header with Quick Language Toggle & Live Save Indicator */}
+      {/* Header with Quick Language Toggle & Quiet Auto-Save Indicator */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.06] bg-[var(--bg-panel)] px-6 py-4">
         <div>
           <h1 className="text-lg font-bold tracking-tight text-white">
@@ -882,26 +979,20 @@ export function SettingsView({
             ))}
           </div>
 
-          {hasUnsavedChanges ? (
-            <span className="rounded-full bg-amber-500/15 px-3 py-1 text-[11px] font-semibold text-amber-300 ring-1 ring-amber-500/35">
-              {t.settings.unsaved}
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              {t.settings.applied}
-            </span>
-          )}
-
-          <button
-            type="button"
-            onClick={() => void commitSave()}
-            disabled={saving}
-            className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-[var(--accent-hover)] disabled:opacity-50"
+          <span
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold ring-1 transition ${
+              saving
+                ? "bg-white/[0.06] text-slate-300 ring-white/[0.1]"
+                : "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30"
+            }`}
           >
-            <Save className="h-4 w-4" />
-            {saving ? t.settings.saving : t.settings.saveBtn}
-          </button>
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            {saving
+              ? t.settings.saving
+              : justSaved
+                ? t.settings.savedPill
+                : t.settings.applied}
+          </span>
         </div>
       </div>
 
@@ -934,14 +1025,53 @@ export function SettingsView({
 
       {/* Settings Content */}
       <div className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-4xl space-y-5">
-          {tab === "capture" && (
+        <div className="mx-auto max-w-4xl space-y-6">
+          {tab === "capture" && (() => {
+            const resChoice =
+              draft.video.resolution.preset === "p720"
+                ? "p720"
+                : draft.video.resolution.preset === "p1080"
+                  ? "p1080"
+                  : draft.video.resolution.preset === "custom" &&
+                      draft.video.resolution.width === 2560 &&
+                      draft.video.resolution.height === 1440
+                    ? "p1440"
+                    : "native";
+            const qualityPreset =
+              draft.video.bitrate_kbps === 3000
+                ? "discord"
+                : draft.video.bitrate_kbps === 12000
+                  ? "optimal"
+                  : draft.video.bitrate_kbps === 25000
+                    ? "high"
+                    : "custom";
+            const fpsValue =
+              draft.video.fps === 30 ||
+              draft.video.fps === 60 ||
+              draft.video.fps === 120
+                ? String(draft.video.fps)
+                : String(draft.video.fps);
+            const fpsPillValues = Array.from(
+              new Set([30, 60, 120, ...(fpsValue !== "30" && fpsValue !== "60" && fpsValue !== "120" ? [draft.video.fps] : [])])
+            ).sort((a, b) => a - b);
+
+            return (
             <>
               <section className={sectionCls}>
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-bold text-white">
-                    {t.settings.videoSourceTitle}
-                  </h2>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-hover)]">
+                      <Monitor className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-bold text-white">
+                        {t.settings.videoSourceTitle}
+                      </h2>
+                      <p className="text-[11px] text-slate-400">
+                        {t.settings.videoSourceDesc}
+                      </p>
+                    </div>
+                  </div>
                   <button
                     type="button"
                     onClick={() => void onRefreshSources()}
@@ -952,166 +1082,102 @@ export function SettingsView({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <div className={`${labelTitleCls} flex items-center gap-1.5`}>
-                      <span>{t.settings.defaultCaptureSource}</span>
-                      <InfoTooltip text={t.settings.tips.captureSource} />
-                    </div>
-                    <CustomSelect
-                      value={draftTargetKey}
-                      options={captureSourceSelectOptions}
-                      onChange={(val) => {
-                        const found = targetOptions.find((o) => o.key === val);
-                        if (found) {
-                          setDraft((p) => ({
-                            ...p,
-                            capture: { ...p.capture, target: found.target },
-                          }));
-                        }
-                      }}
-                      ariaLabel={t.settings.defaultCaptureSource}
-                    />
+                {/* Capture Source */}
+                <div>
+                  <div className={`${labelTitleCls} flex items-center gap-1.5`}>
+                    <span>{t.settings.defaultCaptureSource}</span>
+                    <InfoTooltip text={t.settings.tips.captureSource} />
                   </div>
-
-                  <div>
-                    <div className={`${labelTitleCls} flex items-center gap-1.5`}>
-                      <span>{t.settings.hdrConversion}</span>
-                      <InfoTooltip text={t.settings.tips.hdr} />
-                    </div>
-                    <CustomSelect
-                      value={draft.capture.hdr_mode}
-                      options={hdrOptions}
-                      onChange={(val) =>
+                  <CustomSelect
+                    value={draftTargetKey}
+                    options={captureSourceSelectOptions}
+                    onChange={(val) => {
+                      const found = targetOptions.find((o) => o.key === val);
+                      if (found) {
                         setDraft((p) => ({
                           ...p,
-                          capture: {
-                            ...p.capture,
-                            hdr_mode: val as HdrMode,
-                          },
-                        }))
+                          capture: { ...p.capture, target: found.target },
+                        }));
                       }
-                      ariaLabel={t.settings.hdrConversion}
-                    />
-                  </div>
+                    }}
+                    ariaLabel={t.settings.defaultCaptureSource}
+                  />
+                </div>
 
+                {/* Resolution & FPS Segmented Pills */}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <div className={`${labelTitleCls} flex items-center gap-1.5`}>
                       <span>{t.settings.resolution}</span>
                       <InfoTooltip text={t.settings.tips.resolution} />
                     </div>
-                    <CustomSelect
-                      value={draft.video.resolution.preset}
-                      options={resolutionOptions}
-                      onChange={(pType) => {
+                    <SegmentedControl
+                      value={resChoice}
+                      options={[
+                        { value: "p720", label: "720p" },
+                        { value: "p1080", label: "1080p" },
+                        { value: "p1440", label: "1440p" },
+                        { value: "native", label: t.settings.resNativeShort },
+                      ]}
+                      onChange={(choice) => {
                         const nextRes: ResolutionPreset =
-                          pType === "native"
-                            ? { preset: "native" }
-                            : pType === "p1080"
+                          choice === "p720"
+                            ? { preset: "p720" }
+                            : choice === "p1080"
                               ? { preset: "p1080" }
-                              : pType === "p720"
-                                ? { preset: "p720" }
-                                : {
-                                    preset: "custom",
-                                    width: 1920,
-                                    height: 1080,
-                                  };
+                              : choice === "p1440"
+                                ? { preset: "custom", width: 2560, height: 1440 }
+                                : { preset: "native" };
                         setDraft((p) => ({
                           ...p,
                           video: { ...p.video, resolution: nextRes },
                         }));
                       }}
-                      ariaLabel={t.settings.resolution}
                     />
                   </div>
-
-                  {draft.video.resolution.preset === "custom" && (
-                    <div className="flex items-end gap-2">
-                      <label className="flex-1 text-xs text-slate-300">
-                        {t.settings.width}
-                        <input
-                          type="number"
-                          value={draft.video.resolution.width}
-                          onChange={(e) => {
-                            const w = Math.max(
-                              320,
-                              Number(e.target.value) || 1920
-                            );
-                            setDraft((p) => ({
-                              ...p,
-                              video: {
-                                ...p.video,
-                                resolution: {
-                                  preset: "custom",
-                                  width: w,
-                                  height:
-                                    p.video.resolution.preset === "custom"
-                                      ? p.video.resolution.height
-                                      : 1080,
-                                },
-                              },
-                            }));
-                          }}
-                          className={fieldCls}
-                        />
-                      </label>
-                      <label className="flex-1 text-xs text-slate-300">
-                        {t.settings.height}
-                        <input
-                          type="number"
-                          value={draft.video.resolution.height}
-                          onChange={(e) => {
-                            const h = Math.max(
-                              240,
-                              Number(e.target.value) || 1080
-                            );
-                            setDraft((p) => ({
-                              ...p,
-                              video: {
-                                ...p.video,
-                                resolution: {
-                                  preset: "custom",
-                                  width:
-                                    p.video.resolution.preset === "custom"
-                                      ? p.video.resolution.width
-                                      : 1920,
-                                  height: h,
-                                },
-                              },
-                            }));
-                          }}
-                          className={fieldCls}
-                        />
-                      </label>
-                    </div>
-                  )}
 
                   <div>
                     <div className={`${labelTitleCls} flex items-center gap-1.5`}>
                       <span>{t.settings.fps}</span>
                       <InfoTooltip text={t.settings.tips.fps} />
                     </div>
-                    <CustomSelect
-                      value={String(draft.video.fps)}
-                      options={fpsOptions}
+                    <SegmentedControl
+                      value={fpsValue}
+                      options={fpsPillValues.map((f) => ({
+                        value: String(f),
+                        label: `${f} FPS`,
+                      }))}
                       onChange={(val) =>
                         setDraft((p) => ({
                           ...p,
                           video: { ...p.video, fps: Number(val) },
                         }))
                       }
-                      ariaLabel={t.settings.fps}
                     />
                   </div>
+                </div>
 
+                {/* Video Codec & Clip Quality Presets */}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div>
                     <div className={`${labelTitleCls} flex items-center gap-1.5`}>
                       <span>{t.settings.videoCodec}</span>
                       <InfoTooltip text={t.settings.tips.videoCodec} />
                     </div>
-                    <CustomSelect
+                    <SegmentedControl
                       value={draft.video.codec}
-                      options={codecOptions}
+                      options={[
+                        { value: "h264", label: "H.264" },
+                        { value: "hevc", label: "HEVC" },
+                        {
+                          value: "av1",
+                          label: "AV1",
+                          warn: !av1Supported,
+                          title: av1Supported
+                            ? t.settings.codecAv1
+                            : t.settings.codecAv1Unsupported,
+                        },
+                      ]}
                       onChange={(val) =>
                         setDraft((p) => ({
                           ...p,
@@ -1121,106 +1187,199 @@ export function SettingsView({
                           },
                         }))
                       }
-                      ariaLabel={t.settings.videoCodec}
                     />
+                    {draft.video.codec === "av1" && !av1Supported && (
+                      <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-300">
+                        {t.settings.codecAv1UnavailableWarning}
+                      </p>
+                    )}
                   </div>
 
                   <div>
                     <div className={`${labelTitleCls} flex items-center gap-1.5`}>
-                      <span>{t.settings.gpuEncoder}</span>
-                      <InfoTooltip text={t.settings.tips.gpuEncoder} />
-                    </div>
-                    <CustomSelect
-                      value={draft.video.gpu_vendor}
-                      options={gpuOptions}
-                      onChange={(val) =>
-                        setDraft((p) => ({
-                          ...p,
-                          video: {
-                            ...p.video,
-                            gpu_vendor: val as GpuVendorPreference,
-                          },
-                        }))
-                      }
-                      ariaLabel={t.settings.gpuEncoder}
-                    />
-                  </div>
-
-                  <div className="flex flex-col justify-center">
-                    <AccentSlider
-                      label={t.settings.bitrate}
-                      valueBadge={`${(draft.video.bitrate_kbps / 1000).toFixed(
-                        0
-                      )} ${t.mbpsWord}`}
-                      min={2000}
-                      max={80000}
-                      step={1000}
-                      value={draft.video.bitrate_kbps}
-                      onChange={(val) =>
-                        setDraft((p) => ({
-                          ...p,
-                          video: { ...p.video, bitrate_kbps: val },
-                        }))
-                      }
-                    />
-                  </div>
-
-                  <div>
-                    <div className={`${labelTitleCls} flex items-center gap-1.5`}>
-                      <span>{t.settings.rateControl}</span>
+                      <span>{t.settings.qualityPresetLabel}</span>
                       <InfoTooltip text={t.settings.tips.rateControl} />
                     </div>
-                    <CustomSelect
-                      value={draft.video.rate_control}
-                      options={rateControlOptions}
-                      onChange={(val) =>
+                    <SegmentedControl
+                      value={qualityPreset}
+                      options={[
+                        { value: "discord", label: t.settings.qualityDiscord },
+                        { value: "optimal", label: t.settings.qualityOptimal },
+                        { value: "high", label: t.settings.qualityHigh },
+                        { value: "custom", label: t.settings.qualityCustom },
+                      ]}
+                      onChange={(preset) => {
+                        const kbps =
+                          preset === "discord"
+                            ? 3000
+                            : preset === "optimal"
+                              ? 12000
+                              : preset === "high"
+                                ? 25000
+                                : draft.video.bitrate_kbps === 3000 ||
+                                    draft.video.bitrate_kbps === 12000 ||
+                                    draft.video.bitrate_kbps === 25000
+                                  ? 18000
+                                  : draft.video.bitrate_kbps;
                         setDraft((p) => ({
                           ...p,
-                          video: {
-                            ...p.video,
-                            rate_control: val as RateControlMode,
-                          },
-                        }))
-                      }
-                      ariaLabel={t.settings.rateControl}
+                          video: { ...p.video, bitrate_kbps: kbps },
+                        }));
+                      }}
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 pt-1 md:grid-cols-2">
-                  <ToggleSwitch
-                    checked={draft.capture.capture_cursor}
-                    onChange={(v) =>
-                      setDraft((p) => ({
-                        ...p,
-                        capture: { ...p.capture, capture_cursor: v },
-                      }))
-                    }
-                    label={t.settings.captureCursor}
-                    tooltip={t.settings.tips.captureCursor}
-                  />
-                  <ToggleSwitch
-                    checked={draft.capture.capture_border}
-                    onChange={(v) =>
-                      setDraft((p) => ({
-                        ...p,
-                        capture: { ...p.capture, capture_border: v },
-                      }))
-                    }
-                    label={t.settings.captureBorder}
-                    tooltip={t.settings.tips.captureBorder}
-                  />
-                </div>
+                {/* Fine Bitrate Slider */}
+                <AccentSlider
+                  label={t.settings.bitrate}
+                  valueBadge={`${(draft.video.bitrate_kbps / 1000).toFixed(0)} ${t.mbpsWord}`}
+                  min={2000}
+                  max={80000}
+                  step={1000}
+                  value={draft.video.bitrate_kbps}
+                  onChange={(val) =>
+                    setDraft((p) => ({
+                      ...p,
+                      video: { ...p.video, bitrate_kbps: val },
+                    }))
+                  }
+                />
+
+                <AdvancedAccordion
+                  title={t.settings.advancedSettings}
+                  hint={t.settings.advancedCaptureHint}
+                >
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <div className={`${labelTitleCls} flex items-center gap-1.5`}>
+                        <span>{t.settings.hdrConversion}</span>
+                        <InfoTooltip text={t.settings.tips.hdr} />
+                      </div>
+                      <CustomSelect
+                        value={draft.capture.hdr_mode}
+                        options={hdrOptions}
+                        onChange={(val) =>
+                          setDraft((p) => ({
+                            ...p,
+                            capture: {
+                              ...p.capture,
+                              hdr_mode: val as HdrMode,
+                            },
+                          }))
+                        }
+                        ariaLabel={t.settings.hdrConversion}
+                      />
+                    </div>
+
+                    <div>
+                      <div className={`${labelTitleCls} flex items-center gap-1.5`}>
+                        <span>{t.settings.gpuEncoder}</span>
+                        <InfoTooltip text={t.settings.tips.gpuEncoder} />
+                      </div>
+                      <CustomSelect
+                        value={draft.video.gpu_vendor}
+                        options={gpuOptions}
+                        onChange={(val) =>
+                          setDraft((p) => ({
+                            ...p,
+                            video: {
+                              ...p.video,
+                              gpu_vendor: val as GpuVendorPreference,
+                            },
+                          }))
+                        }
+                        ariaLabel={t.settings.gpuEncoder}
+                      />
+                    </div>
+
+                    <div>
+                      <div className={`${labelTitleCls} flex items-center gap-1.5`}>
+                        <span>{t.settings.rateControl}</span>
+                        <InfoTooltip text={t.settings.tips.rateControl} />
+                      </div>
+                      <CustomSelect
+                        value={draft.video.rate_control}
+                        options={rateControlOptions}
+                        onChange={(val) =>
+                          setDraft((p) => ({
+                            ...p,
+                            video: {
+                              ...p.video,
+                              rate_control: val as RateControlMode,
+                            },
+                          }))
+                        }
+                        ariaLabel={t.settings.rateControl}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <ToggleSwitch
+                      checked={draft.capture.capture_cursor}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          capture: { ...p.capture, capture_cursor: v },
+                        }))
+                      }
+                      label={t.settings.captureCursor}
+                      tooltip={t.settings.tips.captureCursor}
+                    />
+                    <ToggleSwitch
+                      checked={draft.capture.capture_border}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          capture: { ...p.capture, capture_border: v },
+                        }))
+                      }
+                      label={t.settings.captureBorder}
+                      tooltip={t.settings.tips.captureBorder}
+                    />
+                  </div>
+                </AdvancedAccordion>
               </section>
 
               <section className={sectionCls}>
-                <div className="flex items-center gap-1.5">
-                  <h2 className="text-sm font-bold text-white">
-                    {t.settings.replayBufferTitle}
-                  </h2>
-                  <InfoTooltip text={t.settings.tips.replayDuration} />
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-hover)]">
+                    <RefreshCw className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h2 className="text-sm font-bold text-white">
+                        {t.settings.replayBufferTitle}
+                      </h2>
+                      <InfoTooltip text={t.settings.tips.replayDuration} />
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      {t.settings.replayBufferDesc}
+                    </p>
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+
+                <div className="space-y-3">
+                  <SegmentedControl
+                    value={String(draft.replay_buffer.duration_secs)}
+                    options={[
+                      { value: "15", label: `15${t.secShort}` },
+                      { value: "30", label: `30${t.secShort}` },
+                      { value: "60", label: `60${t.secShort}` },
+                      { value: "120", label: `2${minShortUnit}` },
+                      { value: "300", label: `5${minShortUnit}` },
+                    ]}
+                    onChange={(val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        replay_buffer: {
+                          ...p.replay_buffer,
+                          duration_secs: Number(val),
+                        },
+                      }))
+                    }
+                  />
                   <AccentSlider
                     label={t.settings.bufferDurationLabel}
                     valueBadge={`${draft.replay_buffer.duration_secs} ${t.secWord}`}
@@ -1238,25 +1397,8 @@ export function SettingsView({
                       }))
                     }
                   />
-
-                  <AccentSlider
-                    label={t.settings.bufferRamLabel}
-                    valueBadge={`${draft.replay_buffer.max_ram_mb} ${t.mbWord}`}
-                    min={128}
-                    max={2048}
-                    step={64}
-                    value={draft.replay_buffer.max_ram_mb}
-                    onChange={(val) =>
-                      setDraft((p) => ({
-                        ...p,
-                        replay_buffer: {
-                          ...p.replay_buffer,
-                          max_ram_mb: val,
-                        },
-                      }))
-                    }
-                  />
                 </div>
+
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <ToggleSwitch
                     checked={draft.replay_buffer.enabled}
@@ -1285,14 +1427,44 @@ export function SettingsView({
                     tooltip={t.settings.tips.resetBufferOnClip}
                   />
                 </div>
+
+                <AdvancedAccordion
+                  title={t.settings.advancedSettings}
+                  hint={t.settings.bufferRamLabel}
+                >
+                  <AccentSlider
+                    label={t.settings.bufferRamLabel}
+                    valueBadge={`${draft.replay_buffer.max_ram_mb} ${t.mbWord}`}
+                    min={128}
+                    max={2048}
+                    step={64}
+                    value={draft.replay_buffer.max_ram_mb}
+                    onChange={(val) =>
+                      setDraft((p) => ({
+                        ...p,
+                        replay_buffer: {
+                          ...p.replay_buffer,
+                          max_ram_mb: val,
+                        },
+                      }))
+                    }
+                  />
+                </AdvancedAccordion>
               </section>
 
               <section className={sectionCls}>
-                <div className="flex items-center gap-2">
-                  <Gamepad2 className="h-4 w-4 text-[var(--accent-hover)]" />
-                  <h2 className="text-sm font-bold text-white">
-                    {t.settings.gameDetectionTitle}
-                  </h2>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-hover)]">
+                    <Gamepad2 className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-white">
+                      {t.settings.gameDetectionTitle}
+                    </h2>
+                    <p className="text-[11px] text-slate-400">
+                      {t.settings.gameDetectionDesc}
+                    </p>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <ToggleSwitch
@@ -1328,71 +1500,77 @@ export function SettingsView({
                   />
                 </div>
 
-                <div className="max-w-sm">
-                  <AccentSlider
-                    label={t.settings.altTabDelay}
-                    valueBadge={`${draft.capture.games.auto_pause_delay_secs} ${t.secWord}`}
-                    min={0}
-                    max={60}
-                    step={1}
-                    value={draft.capture.games.auto_pause_delay_secs}
-                    onChange={(val) =>
-                      setDraft((p) => ({
-                        ...p,
-                        capture: {
-                          ...p.capture,
-                          games: {
-                            ...p.capture.games,
-                            auto_pause_delay_secs: val,
+                <AdvancedAccordion
+                  title={t.settings.advancedSettings}
+                  hint={`${t.settings.altTabDelay}, ${t.settings.whitelistTitle}`}
+                >
+                  <div className="max-w-sm">
+                    <AccentSlider
+                      label={t.settings.altTabDelay}
+                      valueBadge={`${draft.capture.games.auto_pause_delay_secs} ${t.secWord}`}
+                      min={0}
+                      max={60}
+                      step={1}
+                      value={draft.capture.games.auto_pause_delay_secs}
+                      onChange={(val) =>
+                        setDraft((p) => ({
+                          ...p,
+                          capture: {
+                            ...p.capture,
+                            games: {
+                              ...p.capture.games,
+                              auto_pause_delay_secs: val,
+                            },
                           },
-                        },
-                      }))
-                    }
-                  />
-                </div>
+                        }))
+                      }
+                    />
+                  </div>
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <ExeListEditor
-                    title={t.settings.whitelistTitle}
-                    hint={t.settings.whitelistHint}
-                    placeholder="valorant-win64-shipping.exe"
-                    addLabel={t.settings.exeAddBtn}
-                    emptyLabel={t.settings.exeListEmpty}
-                    items={draft.capture.games.custom_whitelist_exes}
-                    onChange={(next) =>
-                      setDraft((p) => ({
-                        ...p,
-                        capture: {
-                          ...p.capture,
-                          games: {
-                            ...p.capture.games,
-                            custom_whitelist_exes: next,
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <ExeListEditor
+                      title={t.settings.whitelistTitle}
+                      hint={t.settings.whitelistHint}
+                      placeholder="valorant-win64-shipping.exe"
+                      addLabel={t.settings.exeAddBtn}
+                      emptyLabel={t.settings.exeListEmpty}
+                      items={draft.capture.games.custom_whitelist_exes}
+                      onChange={(next) =>
+                        setDraft((p) => ({
+                          ...p,
+                          capture: {
+                            ...p.capture,
+                            games: {
+                              ...p.capture.games,
+                              custom_whitelist_exes: next,
+                            },
                           },
-                        },
-                      }))
-                    }
-                  />
-                  <ExeListEditor
-                    title={t.settings.blacklistTitle}
-                    hint={t.settings.blacklistHint}
-                    placeholder="discord.exe"
-                    addLabel={t.settings.exeAddBtn}
-                    emptyLabel={t.settings.exeListEmpty}
-                    items={draft.capture.games.blacklist_exes}
-                    onChange={(next) =>
-                      setDraft((p) => ({
-                        ...p,
-                        capture: {
-                          ...p.capture,
-                          games: { ...p.capture.games, blacklist_exes: next },
-                        },
-                      }))
-                    }
-                  />
-                </div>
+                        }))
+                      }
+                    />
+                    <ExeListEditor
+                      title={t.settings.blacklistTitle}
+                      hint={t.settings.blacklistHint}
+                      placeholder="discord.exe"
+                      addLabel={t.settings.exeAddBtn}
+                      emptyLabel={t.settings.exeListEmpty}
+                      items={draft.capture.games.blacklist_exes}
+                      onChange={(next) =>
+                        setDraft((p) => ({
+                          ...p,
+                          capture: {
+                            ...p.capture,
+                            games: { ...p.capture.games, blacklist_exes: next },
+                          },
+                        }))
+                      }
+                    />
+                  </div>
+                </AdvancedAccordion>
               </section>
             </>
-          )}
+            );
+          })()}
 
           {tab === "audio" && (
             <>
@@ -1494,20 +1672,6 @@ export function SettingsView({
                         }));
                       }}
                       ariaLabel={t.settings.micLabel}
-                    />
-                  </div>
-
-                  <div className="flex items-end">
-                    <ToggleSwitch
-                      checked={draft.audio.separate_tracks}
-                      onChange={(v) =>
-                        setDraft((p) => ({
-                          ...p,
-                          audio: { ...p.audio, separate_tracks: v },
-                        }))
-                      }
-                      label={t.settings.separateTracks}
-                      tooltip={t.settings.tips.separateTracks}
                     />
                   </div>
                 </div>
@@ -1616,19 +1780,6 @@ export function SettingsView({
                   />
                 </div>
 
-                <div className="pt-1">
-                  <ToggleSwitch
-                    checked={draft.audio.apply_volumes_to_editor ?? true}
-                    onChange={(v) =>
-                      setDraft((p) => ({
-                        ...p,
-                        audio: { ...p.audio, apply_volumes_to_editor: v },
-                      }))
-                    }
-                    label={t.settings.applyVolumesToEditor}
-                    tooltip={t.settings.tips.applyVolumesToEditor}
-                  />
-                </div>
               </section>
 
               <section className={sectionCls}>
@@ -1916,11 +2067,21 @@ export function SettingsView({
               </section>
 
               <section className={sectionCls}>
-                <h2 className="text-sm font-bold text-white">
-                  {t.settings.micProcessingTitle}
-                </h2>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[rgb(var(--accent-rgb)/0.14)] text-[var(--accent-hover)]">
+                    <Mic className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-white">
+                      {t.settings.micProcessingTitle}
+                    </h2>
+                    <p className="text-[11px] text-slate-400">
+                      {t.settings.micProcessingDesc}
+                    </p>
+                  </div>
+                </div>
 
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <ToggleSwitch
                     checked={draft.audio.mic_noise_suppression}
                     onChange={(en) => {
@@ -1939,88 +2100,32 @@ export function SettingsView({
                     tooltip={t.settings.tips.rnnoise}
                   />
 
-                  <ToggleSwitch
-                    checked={draft.audio.mic_soft_limiter}
-                    onChange={(v) =>
-                      setDraft((p) => ({
-                        ...p,
-                        audio: { ...p.audio, mic_soft_limiter: v },
-                      }))
-                    }
-                    label={t.settings.softLimiterLabel}
-                    hint={t.settings.softLimiterHint}
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                  <AccentSlider
-                    label={t.settings.rnnoiseStrength}
-                    valueBadge={`${Math.round(
-                      draft.audio.mic_noise_suppression_strength * 100
-                    )}%`}
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    disabled={!draft.audio.mic_noise_suppression}
-                    value={draft.audio.mic_noise_suppression_strength}
-                    onChange={(val) => {
-                      setDraft((p) => ({
-                        ...p,
-                        audio: {
-                          ...p.audio,
-                          mic_noise_suppression_strength: val,
-                        },
-                      }));
-                      applyLiveRnnoise(
-                        draft.audio.mic_noise_suppression,
-                        val,
-                        draft.audio.mic_noise_gate_db
-                      );
-                    }}
-                  />
-
-                  <div className="space-y-2.5">
-                    <ToggleSwitch
-                      checked={draft.audio.mic_noise_gate_db !== null}
-                      onChange={(en) => {
-                        const gate = en ? -50 : null;
+                  <div className="flex flex-col justify-center">
+                    <AccentSlider
+                      label={t.settings.rnnoiseStrength}
+                      valueBadge={`${Math.round(
+                        draft.audio.mic_noise_suppression_strength * 100
+                      )}%`}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      disabled={!draft.audio.mic_noise_suppression}
+                      value={draft.audio.mic_noise_suppression_strength}
+                      onChange={(val) => {
                         setDraft((p) => ({
                           ...p,
-                          audio: { ...p.audio, mic_noise_gate_db: gate },
+                          audio: {
+                            ...p.audio,
+                            mic_noise_suppression_strength: val,
+                          },
                         }));
                         applyLiveRnnoise(
                           draft.audio.mic_noise_suppression,
-                          draft.audio.mic_noise_suppression_strength,
-                          gate
+                          val,
+                          draft.audio.mic_noise_gate_db
                         );
                       }}
-                      label={t.settings.noiseGateTitle(
-                        draft.audio.mic_noise_gate_db !== null
-                          ? `${draft.audio.mic_noise_gate_db} dBFS`
-                          : t.settings.disabledOption
-                      )}
-                      tooltip={t.settings.tips.noiseGate}
                     />
-                    {draft.audio.mic_noise_gate_db !== null && (
-                      <AccentSlider
-                        valueBadge={`${draft.audio.mic_noise_gate_db} dBFS`}
-                        min={-80}
-                        max={-20}
-                        step={1}
-                        value={draft.audio.mic_noise_gate_db}
-                        onChange={(g) => {
-                          setDraft((p) => ({
-                            ...p,
-                            audio: { ...p.audio, mic_noise_gate_db: g },
-                          }));
-                          applyLiveRnnoise(
-                            draft.audio.mic_noise_suppression,
-                            draft.audio.mic_noise_suppression_strength,
-                            g
-                          );
-                        }}
-                      />
-                    )}
                   </div>
                 </div>
 
@@ -2156,6 +2261,94 @@ export function SettingsView({
                     )}
                   </div>
                 </div>
+
+                <AdvancedAccordion
+                  title={t.settings.advancedSettings}
+                  hint={t.settings.advancedAudioHint}
+                >
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <ToggleSwitch
+                      checked={draft.audio.separate_tracks}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, separate_tracks: v },
+                        }))
+                      }
+                      label={t.settings.separateTracks}
+                      tooltip={t.settings.tips.separateTracks}
+                    />
+                    <ToggleSwitch
+                      checked={draft.audio.apply_volumes_to_editor ?? true}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, apply_volumes_to_editor: v },
+                        }))
+                      }
+                      label={t.settings.applyVolumesToEditor}
+                      tooltip={t.settings.tips.applyVolumesToEditor}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <ToggleSwitch
+                      checked={draft.audio.mic_soft_limiter}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, mic_soft_limiter: v },
+                        }))
+                      }
+                      label={t.settings.softLimiterLabel}
+                      hint={t.settings.softLimiterHint}
+                    />
+
+                    <div className="space-y-2.5">
+                      <ToggleSwitch
+                        checked={draft.audio.mic_noise_gate_db !== null}
+                        onChange={(en) => {
+                          const gate = en ? -50 : null;
+                          setDraft((p) => ({
+                            ...p,
+                            audio: { ...p.audio, mic_noise_gate_db: gate },
+                          }));
+                          applyLiveRnnoise(
+                            draft.audio.mic_noise_suppression,
+                            draft.audio.mic_noise_suppression_strength,
+                            gate
+                          );
+                        }}
+                        label={t.settings.noiseGateTitle(
+                          draft.audio.mic_noise_gate_db !== null
+                            ? `${draft.audio.mic_noise_gate_db} dBFS`
+                            : t.settings.disabledOption
+                        )}
+                        tooltip={t.settings.tips.noiseGate}
+                      />
+                      {draft.audio.mic_noise_gate_db !== null && (
+                        <AccentSlider
+                          valueBadge={`${draft.audio.mic_noise_gate_db} dBFS`}
+                          min={-80}
+                          max={-20}
+                          step={1}
+                          value={draft.audio.mic_noise_gate_db}
+                          onChange={(g) => {
+                            setDraft((p) => ({
+                              ...p,
+                              audio: { ...p.audio, mic_noise_gate_db: g },
+                            }));
+                            applyLiveRnnoise(
+                              draft.audio.mic_noise_suppression,
+                              draft.audio.mic_noise_suppression_strength,
+                              g
+                            );
+                          }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </AdvancedAccordion>
               </section>
             </>
           )}
@@ -2433,6 +2626,94 @@ export function SettingsView({
                     })}
                   </div>
                 </div>
+
+                <AdvancedAccordion
+                  title={t.settings.advancedSettings}
+                  hint={t.settings.advancedAudioHint}
+                >
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <ToggleSwitch
+                      checked={draft.audio.separate_tracks}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, separate_tracks: v },
+                        }))
+                      }
+                      label={t.settings.separateTracks}
+                      tooltip={t.settings.tips.separateTracks}
+                    />
+                    <ToggleSwitch
+                      checked={draft.audio.apply_volumes_to_editor ?? true}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, apply_volumes_to_editor: v },
+                        }))
+                      }
+                      label={t.settings.applyVolumesToEditor}
+                      tooltip={t.settings.tips.applyVolumesToEditor}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <ToggleSwitch
+                      checked={draft.audio.mic_soft_limiter}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, mic_soft_limiter: v },
+                        }))
+                      }
+                      label={t.settings.softLimiterLabel}
+                      hint={t.settings.softLimiterHint}
+                    />
+
+                    <div className="space-y-2.5">
+                      <ToggleSwitch
+                        checked={draft.audio.mic_noise_gate_db !== null}
+                        onChange={(en) => {
+                          const gate = en ? -50 : null;
+                          setDraft((p) => ({
+                            ...p,
+                            audio: { ...p.audio, mic_noise_gate_db: gate },
+                          }));
+                          applyLiveRnnoise(
+                            draft.audio.mic_noise_suppression,
+                            draft.audio.mic_noise_suppression_strength,
+                            gate
+                          );
+                        }}
+                        label={t.settings.noiseGateTitle(
+                          draft.audio.mic_noise_gate_db !== null
+                            ? `${draft.audio.mic_noise_gate_db} dBFS`
+                            : t.settings.disabledOption
+                        )}
+                        tooltip={t.settings.tips.noiseGate}
+                      />
+                      {draft.audio.mic_noise_gate_db !== null && (
+                        <AccentSlider
+                          valueBadge={`${draft.audio.mic_noise_gate_db} dBFS`}
+                          min={-80}
+                          max={-20}
+                          step={1}
+                          value={draft.audio.mic_noise_gate_db}
+                          onChange={(g) => {
+                            setDraft((p) => ({
+                              ...p,
+                              audio: { ...p.audio, mic_noise_gate_db: g },
+                            }));
+                            applyLiveRnnoise(
+                              draft.audio.mic_noise_suppression,
+                              draft.audio.mic_noise_suppression_strength,
+                              g
+                            );
+                          }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </AdvancedAccordion>
               </section>
 
               {/* 8 Theme Presets + Custom Theme Gallery & Builder */}
@@ -2701,6 +2982,94 @@ export function SettingsView({
                     })}
                   </div>
                 </div>
+
+                <AdvancedAccordion
+                  title={t.settings.advancedSettings}
+                  hint={t.settings.advancedAudioHint}
+                >
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <ToggleSwitch
+                      checked={draft.audio.separate_tracks}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, separate_tracks: v },
+                        }))
+                      }
+                      label={t.settings.separateTracks}
+                      tooltip={t.settings.tips.separateTracks}
+                    />
+                    <ToggleSwitch
+                      checked={draft.audio.apply_volumes_to_editor ?? true}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, apply_volumes_to_editor: v },
+                        }))
+                      }
+                      label={t.settings.applyVolumesToEditor}
+                      tooltip={t.settings.tips.applyVolumesToEditor}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <ToggleSwitch
+                      checked={draft.audio.mic_soft_limiter}
+                      onChange={(v) =>
+                        setDraft((p) => ({
+                          ...p,
+                          audio: { ...p.audio, mic_soft_limiter: v },
+                        }))
+                      }
+                      label={t.settings.softLimiterLabel}
+                      hint={t.settings.softLimiterHint}
+                    />
+
+                    <div className="space-y-2.5">
+                      <ToggleSwitch
+                        checked={draft.audio.mic_noise_gate_db !== null}
+                        onChange={(en) => {
+                          const gate = en ? -50 : null;
+                          setDraft((p) => ({
+                            ...p,
+                            audio: { ...p.audio, mic_noise_gate_db: gate },
+                          }));
+                          applyLiveRnnoise(
+                            draft.audio.mic_noise_suppression,
+                            draft.audio.mic_noise_suppression_strength,
+                            gate
+                          );
+                        }}
+                        label={t.settings.noiseGateTitle(
+                          draft.audio.mic_noise_gate_db !== null
+                            ? `${draft.audio.mic_noise_gate_db} dBFS`
+                            : t.settings.disabledOption
+                        )}
+                        tooltip={t.settings.tips.noiseGate}
+                      />
+                      {draft.audio.mic_noise_gate_db !== null && (
+                        <AccentSlider
+                          valueBadge={`${draft.audio.mic_noise_gate_db} dBFS`}
+                          min={-80}
+                          max={-20}
+                          step={1}
+                          value={draft.audio.mic_noise_gate_db}
+                          onChange={(g) => {
+                            setDraft((p) => ({
+                              ...p,
+                              audio: { ...p.audio, mic_noise_gate_db: g },
+                            }));
+                            applyLiveRnnoise(
+                              draft.audio.mic_noise_suppression,
+                              draft.audio.mic_noise_suppression_strength,
+                              g
+                            );
+                          }}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </AdvancedAccordion>
               </section>
 
               <section className={sectionCls}>
@@ -2862,7 +3231,7 @@ export function SettingsView({
                 {updateInfo?.has_update && updateInfo.release_notes && (
                   <div className="space-y-1 rounded-xl bg-white/[0.025] p-3 ring-1 ring-white/[0.06]">
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                      {t.settings.releaseNotesLabel} вЂ” v
+                      {t.settings.releaseNotesLabel} — v
                       {updateInfo.latest_version}
                     </div>
                     <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-sans text-xs text-slate-200">
@@ -3193,115 +3562,120 @@ export function SettingsView({
                   <InfoTooltip text={t.settings.tips.storagePaths} />
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
+                <div>
+                  <label className="block text-xs text-slate-300">
+                    {t.settings.outputDirLabel}
+                    <div className="mt-1.5 flex gap-2">
+                      <input
+                        type="text"
+                        value={draft.storage.output_dir}
+                        onChange={(e) =>
+                          setDraft((p) => ({
+                            ...p,
+                            storage: {
+                              ...p.storage,
+                              output_dir: e.target.value,
+                            },
+                          }))
+                        }
+                        className="flex-1 rounded-xl bg-black/35 px-3 py-2 font-mono text-xs text-white ring-1 ring-white/[0.08] outline-none focus:ring-[var(--accent)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={onOpenFolder}
+                        className="rounded-xl bg-white/[0.06] px-3.5 text-xs font-medium text-slate-200 transition hover:bg-white/[0.12] hover:text-white"
+                      >
+                        {t.settings.openBtn}
+                      </button>
+                    </div>
+                  </label>
+                </div>
+
+                <AdvancedAccordion
+                  title={t.settings.advancedSettings}
+                  hint={t.settings.advancedStorageHint}
+                >
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <label className="block text-xs text-slate-300">
-                      {t.settings.outputDirLabel}
-                      <div className="mt-1.5 flex gap-2">
-                        <input
-                          type="text"
-                          value={draft.storage.output_dir}
-                          onChange={(e) =>
-                            setDraft((p) => ({
-                              ...p,
-                              storage: {
-                                ...p.storage,
-                                output_dir: e.target.value,
-                              },
-                            }))
-                          }
-                          className="flex-1 rounded-xl bg-black/35 px-3 py-2 font-mono text-xs text-white ring-1 ring-white/[0.08] outline-none focus:ring-[var(--accent)]"
-                        />
-                        <button
-                          type="button"
-                          onClick={onOpenFolder}
-                          className="rounded-xl bg-white/[0.06] px-3.5 text-xs font-medium text-slate-200 transition hover:bg-white/[0.12] hover:text-white"
-                        >
-                          {t.settings.openBtn}
-                        </button>
-                      </div>
+                      {t.settings.tempDirLabel}
+                      <input
+                        type="text"
+                        value={draft.storage.temp_dir}
+                        onChange={(e) =>
+                          setDraft((p) => ({
+                            ...p,
+                            storage: { ...p.storage, temp_dir: e.target.value },
+                          }))
+                        }
+                        className={`${fieldCls} font-mono`}
+                      />
+                    </label>
+
+                    <label className="block text-xs text-slate-300">
+                      {t.settings.maxStorageLabel}
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder={t.settings.noLimitPlaceholder}
+                        value={draft.storage.max_storage_gb ?? ""}
+                        onChange={(e) => {
+                          const val = e.target.value
+                            ? Math.max(1, Number(e.target.value))
+                            : null;
+                          setDraft((p) => ({
+                            ...p,
+                            storage: { ...p.storage, max_storage_gb: val },
+                          }));
+                        }}
+                        className={fieldCls}
+                      />
+                    </label>
+
+                    <label className="block text-xs text-slate-300">
+                      {t.settings.maxAgeLabel}
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder={t.settings.noAgeLimitPlaceholder}
+                        value={draft.storage.max_age_days ?? ""}
+                        onChange={(e) => {
+                          const val = e.target.value
+                            ? Math.max(1, Number(e.target.value))
+                            : null;
+                          setDraft((p) => ({
+                            ...p,
+                            storage: { ...p.storage, max_age_days: val },
+                          }));
+                        }}
+                        className={fieldCls}
+                      />
                     </label>
                   </div>
 
-                  <label className="block text-xs text-slate-300">
-                    {t.settings.tempDirLabel}
-                    <input
-                      type="text"
-                      value={draft.storage.temp_dir}
-                      onChange={(e) =>
-                        setDraft((p) => ({
-                          ...p,
-                          storage: { ...p.storage, temp_dir: e.target.value },
-                        }))
-                      }
-                      className={`${fieldCls} font-mono`}
-                    />
-                  </label>
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.06] pt-3">
+                    <div className="min-w-[260px] flex-1">
+                      <ToggleSwitch
+                        checked={draft.storage.auto_remux_fmp4}
+                        onChange={(v) =>
+                          setDraft((p) => ({
+                            ...p,
+                            storage: { ...p.storage, auto_remux_fmp4: v },
+                          }))
+                        }
+                        label={t.settings.autoRemuxLabel}
+                      />
+                    </div>
 
-                  <label className="block text-xs text-slate-300">
-                    {t.settings.maxStorageLabel}
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder={t.settings.noLimitPlaceholder}
-                      value={draft.storage.max_storage_gb ?? ""}
-                      onChange={(e) => {
-                        const val = e.target.value
-                          ? Math.max(1, Number(e.target.value))
-                          : null;
-                        setDraft((p) => ({
-                          ...p,
-                          storage: { ...p.storage, max_storage_gb: val },
-                        }));
-                      }}
-                      className={fieldCls}
-                    />
-                  </label>
-
-                  <label className="block text-xs text-slate-300">
-                    {t.settings.maxAgeLabel}
-                    <input
-                      type="number"
-                      min={1}
-                      placeholder={t.settings.noAgeLimitPlaceholder}
-                      value={draft.storage.max_age_days ?? ""}
-                      onChange={(e) => {
-                        const val = e.target.value
-                          ? Math.max(1, Number(e.target.value))
-                          : null;
-                        setDraft((p) => ({
-                          ...p,
-                          storage: { ...p.storage, max_age_days: val },
-                        }));
-                      }}
-                      className={fieldCls}
-                    />
-                  </label>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-between gap-4 border-t border-white/[0.06] pt-3">
-                  <div className="min-w-[260px] flex-1">
-                    <ToggleSwitch
-                      checked={draft.storage.auto_remux_fmp4}
-                      onChange={(v) =>
-                        setDraft((p) => ({
-                          ...p,
-                          storage: { ...p.storage, auto_remux_fmp4: v },
-                        }))
-                      }
-                      label={t.settings.autoRemuxLabel}
-                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleCleanupNow()}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500/15 px-3.5 py-2 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/35 transition hover:bg-amber-500 hover:text-slate-950"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {t.settings.cleanupDiskBtn}
+                    </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => void handleCleanupNow()}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-amber-500/15 px-3.5 py-2 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/35 transition hover:bg-amber-500 hover:text-slate-950"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    {t.settings.cleanupDiskBtn}
-                  </button>
-                </div>
+                </AdvancedAccordion>
               </section>
             </>
           )}

@@ -20,6 +20,7 @@ import type {
   TrackWaveform,
   TrimRequest,
   UpdateInfo,
+  VideoCodec,
   WindowInfo,
 } from "./types";
 import { DEFAULT_CUSTOM_THEME, DEFAULT_UI_SETTINGS } from "./utils/theme";
@@ -746,6 +747,8 @@ export const api = {
 
   pickAudioFile: async (): Promise<string | null> =>
     "C:\\Users\\Gamer\\Music\\custom_notify.wav",
+
+  getSupportedCodecs: async (): Promise<VideoCodec[]> => ["h264", "hevc", "av1"],
 
   checkForUpdates: async (): Promise<UpdateInfo> => ({
     has_update: false,

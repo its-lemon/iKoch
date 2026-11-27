@@ -503,6 +503,89 @@ fn paths_share_root(path: &Path, root: &Path) -> bool {
     p == r || p.starts_with(&format!("{r}\\"))
 }
 
+fn infer_imported_game_name(output_dir: &Path, mp4_path: &Path) -> (String, bool, bool) {
+    let rel_parent = mp4_path
+        .parent()
+        .and_then(|p| p.strip_prefix(output_dir).ok());
+    let mut game_candidate: Option<String> = None;
+    let mut is_session = false;
+    let mut is_edited = false;
+
+    if let Some(rel) = rel_parent {
+        for comp in rel.components() {
+            let name = comp.as_os_str().to_string_lossy().trim().to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let lower = name.to_ascii_lowercase();
+            if lower == "sessions" {
+                is_session = true;
+                continue;
+            }
+            if lower == "edited" {
+                is_edited = true;
+                continue;
+            }
+            if matches!(lower.as_str(), "clips" | "screen" | "imported") {
+                continue;
+            }
+            game_candidate = Some(name);
+        }
+    }
+
+    (
+        game_candidate.unwrap_or_else(|| "Imported".to_string()),
+        is_session,
+        is_edited,
+    )
+}
+
+fn build_imported_clip_metadata(output_dir: &Path, mp4_path: &Path) -> ClipMetadata {
+    let title = mp4_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Imported Clip")
+        .to_string();
+    let (game_name, is_session, is_edited) = infer_imported_game_name(output_dir, mp4_path);
+    let fs_meta = fs::metadata(mp4_path).ok();
+    let file_size_bytes = fs_meta.as_ref().map_or(0, |m| m.len());
+    let created_at = fs_meta
+        .as_ref()
+        .and_then(|m| m.modified().ok().or_else(|| m.created().ok()))
+        .map_or_else(Utc::now, DateTime::<Utc>::from);
+
+    ClipMetadata {
+        id: uuid::Uuid::new_v4(),
+        title,
+        game_name,
+        executable_name: None,
+        kind: if is_session {
+            core_types::RecordingKind::Session
+        } else {
+            core_types::RecordingKind::Clip
+        },
+        file_path: mp4_path.to_path_buf(),
+        thumbnail_path: None,
+        waveform_path: None,
+        created_at,
+        duration_sec: 0.0,
+        file_size_bytes,
+        width: 0,
+        height: 0,
+        fps: 60,
+        video_codec: core_types::VideoCodec::H264,
+        video_bitrate_kbps: 0,
+        audio_tracks: Vec::new(),
+        markers: Vec::new(),
+        favorite: false,
+        is_edited,
+        tags: Vec::new(),
+        crash_recovered: false,
+    }
+}
+
 fn normalize_legacy_metadata_labels(meta: &mut ClipMetadata) -> bool {
     let mut changed = false;
 
@@ -575,17 +658,27 @@ fn collect_managed_recordings(output_dir: &Path) -> Vec<ManagedRecording> {
         };
         for entry in entries.flatten() {
             let mp4_path = entry.path();
+            let file_name_lower = mp4_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
             if !mp4_path.is_file()
-                || !mp4_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
+                || !file_name_lower.ends_with(".mp4")
+                || file_name_lower.ends_with(".tmp.mp4")
+                || file_name_lower.ends_with(".fmp4")
+                || file_len_or_zero(&mp4_path) == 0
             {
                 continue;
             }
             let sidecar_path = ClipMetadata::sidecar_path_for(&mp4_path);
-            let Ok(mut metadata) = load_clip_metadata_direct(&sidecar_path) else {
-                continue;
+            let mut metadata = match load_clip_metadata_direct(&sidecar_path) {
+                Ok(m) => m,
+                Err(_) => {
+                    let imported = build_imported_clip_metadata(output_dir, &mp4_path);
+                    let _ = save_clip_metadata(&imported);
+                    imported
+                }
             };
             metadata.file_path = mp4_path.clone();
             if normalize_legacy_metadata_labels(&mut metadata) {
@@ -823,6 +916,28 @@ mod tests {
         for meta in [&old_fav, &old_edited, &newest_regular] {
             let _ = fs::remove_file(ClipMetadata::sidecar_path_for(&meta.file_path));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn bare_mp4_without_sidecar_is_auto_indexed_with_game_folder_name() -> Result<(), String> {
+        let temp_dir = std::env::temp_dir().join(format!("ikoch_import_{}", Uuid::new_v4()));
+        let game_dir = temp_dir.join("Valorant");
+        fs::create_dir_all(&game_dir).map_err(|e| e.to_string())?;
+        let mp4_path = game_dir.join("clip.mp4");
+        fs::write(&mp4_path, vec![0xAB; 4096]).map_err(|e| e.to_string())?;
+
+        let listed = list_clip_metadata(&temp_dir);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].game_name, "Valorant");
+        assert_eq!(listed[0].title, "clip");
+        assert_eq!(listed[0].file_size_bytes, 4096);
+
+        let sidecar = ClipMetadata::sidecar_path_for(&mp4_path);
+        assert!(sidecar.exists(), "auto-indexed clip must persist JSON sidecar in cache");
+
+        let _ = fs::remove_file(&sidecar);
+        let _ = fs::remove_dir_all(&temp_dir);
         Ok(())
     }
 
